@@ -26,9 +26,11 @@ Where books come from. Each implements the `Source` contract and is registered o
 - [Anna's Archive](sources/anna-archive.md)
 - [Prowlarr](sources/prowlarr.md)
 
-## Delivery (where the file ends up)
+## Destinations (where the file ends up)
 
-- [Delivery: this chat, email, and Send to Kindle](delivery.md)
+Pluggable delivery targets — this chat, email, Send to Kindle, and easy to extend.
+
+- [Destinations — overview & how to add one](destinations.md)
 
 ## Contributing
 

@@ -12,7 +12,7 @@ Full docs live in [`docs/`](./docs/README.md): [architecture](./docs/architectur
 [configuration](./docs/configuration.md) ·
 clients ([Telegram](./docs/clients/telegram.md), [Discord](./docs/clients/discord.md)) ·
 sources ([Anna's Archive](./docs/sources/anna-archive.md), [Prowlarr](./docs/sources/prowlarr.md)) ·
-[delivery](./docs/delivery.md) · [development](./docs/development.md).
+[destinations](./docs/destinations.md) · [development](./docs/development.md).
 
 The step-by-step setup below is the quickest way to get running.
 

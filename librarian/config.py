@@ -26,7 +26,7 @@ def _int_set(raw: str) -> set[int]:
 
 
 # --- Shared / product-wide -------------------------------------------------
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "owner/librarian-bot")
 MAX_RESULTS = 10
 MAX_QUERY_LENGTH = 200

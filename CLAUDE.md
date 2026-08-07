@@ -43,6 +43,10 @@ librarian/
     base.py            # Source ABC: search() / download()
     registry.py        # THE place to register a source (a list)
     anna.py prowlarr.py
+  destinations/
+    base.py            # Destination ABC: available() / deliver()
+    registry.py        # THE place to register a destination
+    here.py email.py kindle.py
   clients/
     base.py            # ClientContext port + Session (resumable, future-based)
     flow.py            # the ENTIRE conversation UX, platform-agnostic
@@ -55,9 +59,12 @@ main.py                # starts every configured client (Telegram and/or Discord
 the Telegram `Application` (programmatic initialize/start/start_polling) and/or
 `DiscordClient.start()`. Configure at least one of `TELEGRAM_TOKEN` / `DISCORD_TOKEN`.
 
-### Two extension axes (the whole point)
+### Three extension axes (the whole point)
 - **Add a download source**: create `librarian/sources/<name>.py` with a `Source`
   subclass, add it to `registry._ALL`. No core/client change.
+- **Add a destination** (delivery target): create `librarian/destinations/<name>.py`
+  with a `Destination` subclass (`available()` / `deliver()`), add it to
+  `destinations/registry._ALL`. No core/flow change.
 - **Add a client platform** (Discord is the reference impl; WhatsApp next): create
   an adapter under `librarian/clients/` implementing `ClientContext` (`_send`/
   `_edit`/`_send_document`/`max_file_size`) and routing incoming events into the

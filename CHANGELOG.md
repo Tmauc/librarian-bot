@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.2.0] — 2026-08-07
+
+### Changed
+
+- **Destinations are now a pluggable seam** (`librarian/destinations/`), alongside sources and
+  clients. Each delivery target (`here`, `email`, `kindle`) is a `Destination` subclass
+  (`available()` / `deliver()`) registered in one place; the flow just offers the available ones
+  and dispatches. Adding a destination (local folder, Dropbox, webhook…) touches no core, flow,
+  source or client code. Email is now only offered when SMTP is actually configured.
+
+### Docs
+
+- `docs/delivery.md` → `docs/destinations.md`, rewritten as the destination-seam guide with a
+  "how to add one" and an **e-reader format matrix** (Kindle / Kobo incl. Clara Colour).
+
+---
+
 ## [2.1.0] — 2026-08-07
 
 ### Added

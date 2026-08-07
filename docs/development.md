@@ -15,7 +15,7 @@ Configure at least one client in `.env` — see [configuration](configuration.md
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest         # 70 tests
+python -m pytest         # 77 tests
 ruff check librarian main.py tests
 ```
 
@@ -32,14 +32,16 @@ Lint config is in [`ruff.toml`](../ruff.toml).
 | Search fan-out / order / dedup | `tests/test_search_service.py` |
 | End-to-end flow (fake client) | `tests/test_flow.py` |
 | Telegram / Discord adapters | `tests/test_telegram_adapter.py`, `tests/test_discord_adapter.py` |
+| Destinations (availability, dispatch) | `tests/test_destinations.py` |
 | Pure helpers | `tests/test_pure_functions.py`, `tests/test_flow_logic.py` |
 
 ## Extending
 
 - **Add a download source** → [sources/README.md#adding-a-source](sources/README.md#adding-a-source)
 - **Add a client platform** → [clients/README.md#adding-a-client](clients/README.md#adding-a-client)
+- **Add a destination** → [destinations.md#adding-a-destination](destinations.md#adding-a-destination)
 
-Both are drop-ins: the `core/` package and `clients/flow.py` never change.
+All three are drop-ins: the `core/` package and `clients/flow.py` never change.
 
 ## Conventions
 

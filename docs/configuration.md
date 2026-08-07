@@ -30,7 +30,7 @@ least one client** (Telegram and/or Discord).
 | Variable | Used by | Description |
 |---|---|---|
 | `ALLOWED_FORMATS` | [flow](architecture.md) | Offered formats among `epub,pdf,mobi,azw3` (default `epub,pdf`). |
-| `SMTP_HOST` / `SMTP_PORT` | [delivery](delivery.md) | SMTP server (default `smtp.gmail.com` / `587`). |
+| `SMTP_HOST` / `SMTP_PORT` | [destinations](destinations.md) | SMTP server (default `smtp.gmail.com` / `587`). |
 | `SMTP_USER` / `SMTP_PASSWORD` | delivery | SMTP login. Gmail: use an App Password. |
 | `SMTP_FROM` | delivery | Sender address (defaults to `SMTP_USER`). |
 
@@ -38,7 +38,7 @@ least one client** (Telegram and/or Discord).
 
 | Variable | Description |
 |---|---|
-| `VIRUSTOTAL_API_KEY` | Scan files before sending ([delivery](delivery.md)). Empty = disabled. |
+| `VIRUSTOTAL_API_KEY` | Scan files before sending ([destinations](destinations.md)). Empty = disabled. |
 | `GITHUB_REPO` | `owner/repo` watched for new releases (Telegram notification). Empty = disabled. |
 | `USER_PREFS_FILE` | Path to the per-user prefs JSON. Defaults next to the repo root; set in Docker. |
 
