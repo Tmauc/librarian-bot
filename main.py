@@ -10,6 +10,7 @@ import contextlib
 import glob
 import logging
 import os
+import sys
 import tempfile
 
 import certifi
@@ -67,11 +68,13 @@ async def _amain() -> None:
 
     if config.DISCORD_TOKEN:
         # discord.py (aiohttp) caches its default SSL context at import time; on the
-        # macOS python.org build that context often lacks CA certs and TLS fails with
-        # "certificate verify failed". certifi is already installed (httpx dep), so
-        # point OpenSSL at it BEFORE importing the adapter. setdefault respects an
-        # explicit override.
-        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+        # macOS/Windows python.org builds that context often lacks CA certs and TLS
+        # fails with "certificate verify failed". certifi is already installed (httpx
+        # dep), so point OpenSSL at it BEFORE importing the adapter. Linux ships system
+        # CA certs (aiohttp works natively), so its trust store is left untouched.
+        # setdefault respects an explicit override.
+        if sys.platform != "linux":
+            os.environ.setdefault("SSL_CERT_FILE", certifi.where())
         from librarian.clients.discord.adapter import DiscordClient
 
         discord_client = DiscordClient()

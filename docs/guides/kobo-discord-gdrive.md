@@ -80,7 +80,9 @@ python scripts/get_gdrive_token.py
 ```
 
 Paste the Client ID and secret when asked. A browser opens → authorize with the Google account
-whose Drive you'll use. The script prints:
+whose Drive you'll use. (Run this on a machine **with a browser** — e.g. your Mac. If the bot
+will live on a headless NUC/Raspberry Pi, generate the token here and just paste the `GDRIVE_*`
+lines into the `.env` you deploy.) The script prints:
 
 ```
 GDRIVE_CLIENT_ID=...
