@@ -16,13 +16,26 @@ def ebook_convert_available() -> bool:
 
 
 def _convert_sync(epub_path: str) -> str:
-    """Blocking epub→PDF conversion using PyMuPDF."""
+    """Blocking epub→PDF conversion using PyMuPDF.
+
+    NOTE: ``Document.save()`` only works on documents that are already PDFs — on
+    an EPUB it raises ``AssertionError``. Real conversion goes through
+    ``convert_to_pdf()``, which renders the source into PDF bytes we then reopen
+    and save.
+    """
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="librarian_") as f:
         pdf_path = f.name
     try:
-        doc = fitz.open(epub_path)
-        doc.save(pdf_path)
-        doc.close()
+        src = fitz.open(epub_path)
+        try:
+            pdf_bytes = src.convert_to_pdf()
+        finally:
+            src.close()
+        pdf = fitz.open("pdf", pdf_bytes)
+        try:
+            pdf.save(pdf_path)
+        finally:
+            pdf.close()
         if not os.path.exists(pdf_path) or os.path.getsize(pdf_path) < 1024:
             raise RuntimeError("PyMuPDF produced an empty or missing PDF")
         return pdf_path
@@ -41,23 +54,25 @@ async def epub_to_pdf(epub_path: str) -> str:
 
 
 def _convert_to_format_sync(epub_path: str, fmt: str) -> str:
-    """Blocking epub→MOBI/AZW3 conversion. Uses Calibre if available, else PyMuPDF."""
+    """Blocking epub→MOBI/AZW3 conversion. Requires Calibre's ebook-convert.
+
+    PyMuPDF cannot produce MOBI/AZW3 at all (``save()`` only emits PDF bytes, and
+    only for PDF documents), so there is no meaningful fallback: emitting a
+    PDF-under-a-.mobi-name yields a file Kindle rejects. We raise instead, and the
+    caller degrades gracefully by sending the original EPUB.
+    """
+    if not ebook_convert_available():
+        raise RuntimeError(
+            f"{fmt.upper()} conversion requires Calibre (ebook-convert). "
+            "Install Calibre, or choose EPUB/PDF instead."
+        )
+
     suffix = f".{fmt}"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix="librarian_") as f:
         output_path = f.name
 
     try:
-        if ebook_convert_available():
-            _convert_with_calibre(epub_path, output_path)
-        else:
-            logger.warning(
-                f"ebook-convert not found — falling back to PyMuPDF for {fmt.upper()} "
-                "(install Calibre for accurate conversion)"
-            )
-            doc = fitz.open(epub_path)
-            doc.save(output_path)
-            doc.close()
-
+        _convert_with_calibre(epub_path, output_path)
         if not os.path.exists(output_path) or os.path.getsize(output_path) < 1024:
             raise RuntimeError(f"Conversion produced an empty or missing {fmt.upper()} file")
         return output_path
