@@ -2,13 +2,13 @@
 
 import pytest
 
-import main
 from librarian.clients import flow
+from librarian.clients.telegram import adapter as telegram_adapter
 from librarian.core import watcher
 from librarian.sources import anna
 
 
-# --- main._is_newer_version ------------------------------------------------
+# --- telegram adapter._is_newer_version ------------------------------------
 @pytest.mark.parametrize(
     "remote,local,expected",
     [
@@ -21,7 +21,7 @@ from librarian.sources import anna
     ],
 )
 def test_is_newer_version(remote, local, expected):
-    assert main._is_newer_version(remote, local) is expected
+    assert telegram_adapter._is_newer_version(remote, local) is expected
 
 
 # --- flow._fmt_size --------------------------------------------------------

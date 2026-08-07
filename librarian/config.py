@@ -26,7 +26,7 @@ def _int_set(raw: str) -> set[int]:
 
 
 # --- Shared / product-wide -------------------------------------------------
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "owner/librarian-bot")
 MAX_RESULTS = 10
 MAX_QUERY_LENGTH = 200
@@ -50,3 +50,9 @@ TELEGRAM_ALLOWED_IDS: set[int] = _int_set(os.environ.get("ALLOWED_USER_IDS", "")
 LOCAL_API_SERVER = os.environ.get("LOCAL_API_SERVER", "").rstrip("/")
 # Telegram caps uploads at 50 MB; a local Bot API server lifts it (we use 400 MB).
 TELEGRAM_MAX_FILE_SIZE = 400 * 1024 * 1024 if LOCAL_API_SERVER else 50 * 1024 * 1024
+
+# --- Discord client (platform-specific glue only) --------------------------
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "")
+DISCORD_ALLOWED_IDS: set[int] = _int_set(os.environ.get("DISCORD_ALLOWED_IDS", ""))
+# Discord's upload limit for non-boosted servers/DMs is 25 MB.
+DISCORD_MAX_FILE_SIZE = 25 * 1024 * 1024
