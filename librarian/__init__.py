@@ -6,4 +6,4 @@ Layout:
 - ``librarian.clients`` : messaging front-ends; only the adapter is platform-specific
 """
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"

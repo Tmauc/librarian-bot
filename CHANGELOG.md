@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.4.0] — 2026-08-07
+
+### Changed
+
+- **Conversation UX + rich rendering.** The bot now posts a new message per step (instead of
+  editing one), so onboarding and prompts read as a real conversation; the previous prompt's
+  buttons are disabled as you advance, and only the download progress bar edits in place.
+- **Rich result list and book detail card.** Search results show author/year/language/size, and
+  selecting one opens a detail card with the **cover** and a **description** (fetched from the
+  book page) plus Télécharger / Retour. On **Discord** this renders as embeds and a **select
+  menu** (ideal for long titles); on Telegram as formatted text.
+- Anna's Archive source now parses author/year/language/size/cover per result and can fetch a
+  fuller description on demand.
+
+---
+
 ## [2.3.0] — 2026-08-07
 
 ### Added

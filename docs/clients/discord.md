@@ -40,8 +40,12 @@ also work.
 
 - **Upload limit: 25 MB** (`config.DISCORD_MAX_FILE_SIZE`). Larger results are skipped
   automatically.
-- Choices render as **button Views** (`discord.ui.View`); up to 5 buttons per row, laid out
-  across rows. `discord.ui.View` must be built inside a running event loop.
+- Rich content (`Card`) renders as an **embed**; a book's detail card shows its cover as the
+  embed thumbnail.
+- Choices render as **buttons**, or — when they carry a description (e.g. the result list) — as a
+  **select menu** (`discord.ui.Select`), which handles long titles far better than buttons. Any
+  plain choice (Cancel/Back) sits as a button alongside. `discord.ui.View`/components must be
+  built inside a running event loop.
 - Button clicks are acknowledged with `interaction.response.defer()` within 3 s; the flow then
   edits the message. Clicks on stale messages are ignored.
 - Requires the **Message Content intent** (privileged) — the bot cannot read search queries

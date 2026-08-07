@@ -19,10 +19,18 @@ these; the adapter implements the four primitives (the rest is provided by the b
 | Member | Kind | Purpose |
 |---|---|---|
 | `max_file_size` | property | Platform upload limit in bytes. |
-| `_send(text, choices)` | abstract | Send a new message (optionally with choice buttons); return a handle. |
-| `_edit(handle, text, choices)` | abstract | Edit that message in place. |
+| `_send(content, choices)` | abstract | Send a new message (`content` is a `str` or a rich `Card`); return a handle. |
+| `_edit(handle, content, choices)` | abstract | Edit that message in place. |
+| `_disable(handle)` | abstract | Remove a message's buttons (keep its content). |
 | `_send_document(path, filename, caption)` | abstract | Upload a file. |
 | `ask_choice` / `ask_text` / `say` / `update_status` / `send_document` | provided | Flow-facing API built on the primitives. |
+
+**Conversation model:** `say`/`ask_*` post a NEW message and disable the previous prompt's
+buttons (via `_disable`); only `update_status` (download progress) edits one message in place.
+
+**Rich content:** a `Card` (title/description/fields/thumbnail/footer) renders as a Discord
+embed or as formatted text on Telegram. A `Choice` may carry a `description`/`emoji` so an
+adapter can render a richer picker (e.g. a Discord select menu for long result lists).
 
 `ask_choice` / `ask_text` park an `asyncio.Future` on the user's `Session`; the flow
 suspends until the adapter resolves it.
