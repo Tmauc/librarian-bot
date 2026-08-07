@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import logging
 
 import httpx
@@ -29,7 +30,7 @@ from telegram.ext import (
 
 from librarian import config
 from librarian.clients import flow
-from librarian.clients.base import CANCEL, Choice, ClientContext, Session
+from librarian.clients.base import CANCEL, Card, Choice, ClientContext, Content, Session
 
 logger = logging.getLogger(__name__)
 
@@ -52,23 +53,58 @@ class TelegramContext(ClientContext):
     def _kb(choices: list[Choice] | None):
         if not choices:
             return None
-        # Choice.value is short (< 64 bytes) for all flow choices, so it doubles as
-        # the callback_data — no separate token table needed.
-        return InlineKeyboardMarkup([[InlineKeyboardButton(c.label, callback_data=c.value)] for c in choices])
+        # One button per row (stacks vertically → long titles stay readable).
+        # Choice.value is short (< 64 bytes) so it doubles as the callback_data.
+        rows = []
+        for c in choices:
+            label = (f"{c.emoji} " if c.emoji else "") + c.label
+            rows.append([InlineKeyboardButton(label[:64], callback_data=c.value)])
+        return InlineKeyboardMarkup(rows)
 
-    async def _send(self, text: str, choices: list[Choice] | None = None):
-        return await self._bot.send_message(self._chat_id, text, reply_markup=self._kb(choices))
+    @staticmethod
+    def _render(content: Content):
+        """Return (text, parse_mode). A Card becomes escaped HTML; a str is plain."""
+        if isinstance(content, Card):
+            parts = []
+            if content.title:
+                parts.append(f"<b>{html.escape(content.title)}</b>")
+            if content.description:
+                parts.append(html.escape(content.description))
+            for name, value in content.fields:
+                parts.append(f"<b>{html.escape(name)}</b> : {html.escape(value)}")
+            if content.thumbnail:
+                parts.append(f'🖼️ <a href="{html.escape(content.thumbnail, quote=True)}">Couverture</a>')
+            if content.footer:
+                parts.append(f"<i>{html.escape(content.footer)}</i>")
+            return ("\n\n".join(parts) or "…"), "HTML"
+        return content, None
 
-    async def _edit(self, handle, text: str, choices: list[Choice] | None = None) -> None:
+    async def _send(self, content: Content, choices: list[Choice] | None = None):
+        text, mode = self._render(content)
+        return await self._bot.send_message(
+            self._chat_id, text, parse_mode=mode,
+            reply_markup=self._kb(choices), disable_web_page_preview=True,
+        )
+
+    async def _edit(self, handle, content: Content, choices: list[Choice] | None = None) -> None:
+        text, mode = self._render(content)
         try:
             await self._bot.edit_message_text(
-                text, chat_id=handle.chat_id, message_id=handle.message_id, reply_markup=self._kb(choices)
+                text, chat_id=handle.chat_id, message_id=handle.message_id,
+                parse_mode=mode, reply_markup=self._kb(choices), disable_web_page_preview=True,
             )
         except BadRequest as e:
             msg = str(e).lower()
             if "not modified" in msg or "message to edit not found" in msg:
                 return  # benign for our evolving-message UX
             raise
+
+    async def _disable(self, handle) -> None:
+        """Remove the inline keyboard from a message (keeps its text)."""
+        with contextlib.suppress(Exception):
+            await self._bot.edit_message_reply_markup(
+                chat_id=handle.chat_id, message_id=handle.message_id, reply_markup=None
+            )
 
     async def _send_document(self, path: str, filename: str, caption: str) -> None:
         with open(path, "rb") as f:

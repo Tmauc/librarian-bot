@@ -29,13 +29,25 @@ class FakeContext(ClientContext):
     def max_file_size(self):
         return 50 * 1024 * 1024
 
-    async def _send(self, text, choices=None):
+    @staticmethod
+    def _text(content):
+        from librarian.clients.base import Card
+
+        if isinstance(content, Card):
+            parts = [content.title, content.description] + [f"{n}: {v}" for n, v in content.fields]
+            return " ".join(p for p in parts if p)
+        return content
+
+    async def _send(self, content, choices=None):
         self._mid += 1
-        self.messages.append(text)
+        self.messages.append(self._text(content))
         return self._mid
 
-    async def _edit(self, handle, text, choices=None):
-        self.messages.append(text)
+    async def _edit(self, handle, content, choices=None):
+        self.messages.append(self._text(content))
+
+    async def _disable(self, handle):
+        pass
 
     async def _send_document(self, path, filename, caption):
         self.docs.append((filename, os.path.getsize(path)))
@@ -111,7 +123,8 @@ def test_search_downloads_and_delivers_document():
         s = Session("test:1")
         ctx = FakeContext(s)
         # pick result 0, then choose epub format (ALLOWED_FORMATS = epub,pdf)
-        await drive(s, flow.run_search(ctx, "dune"), [("choice", "0"), ("choice", "epub")])
+        # pick result 0 → detail card → Télécharger → format epub
+        await drive(s, flow.run_search(ctx, "dune"), [("choice", "0"), ("choice", "dl"), ("choice", "epub")])
         return ctx
 
     ctx = asyncio.run(scenario())
@@ -148,7 +161,10 @@ def test_search_offers_and_uses_email_destination(monkeypatch):
         s = Session("test:1")
         ctx = FakeContext(s)
         # pick result 0 → format epub → destination menu (here/email) → choose email
-        await drive(s, flow.run_search(ctx, "dune"), [("choice", "0"), ("choice", "epub"), ("choice", "email")])
+        await drive(
+            s, flow.run_search(ctx, "dune"),
+            [("choice", "0"), ("choice", "dl"), ("choice", "epub"), ("choice", "email")],
+        )
         return ctx
 
     ctx = asyncio.run(scenario())

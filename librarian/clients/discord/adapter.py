@@ -16,26 +16,55 @@ import discord
 
 from librarian import config
 from librarian.clients import flow
-from librarian.clients.base import CANCEL, Choice, ClientContext, Session
+from librarian.clients.base import CANCEL, Card, Choice, ClientContext, Content, Session
 
 logger = logging.getLogger(__name__)
 
+_EMBED_COLOR = 0x5865F2  # Discord blurple
+
 
 class _FlowView(discord.ui.View):
-    """A button row whose clicks are routed back to the client by custom_id."""
+    """Routes clicks back to the client. Rich choices (those with a description)
+    render as a select menu — ideal for long book titles — with any plain choices
+    (Cancel/Back/Skip) as buttons; otherwise everything renders as buttons."""
 
     def __init__(self, client: DiscordClient, choices: list[Choice]):
         super().__init__(timeout=None)
-        for i, c in enumerate(choices):
-            style = discord.ButtonStyle.danger if c.value == CANCEL else discord.ButtonStyle.secondary
-            button = discord.ui.Button(label=c.label[:80], custom_id=c.value, row=min(i // 5, 4), style=style)
-            button.callback = self._make_callback(client, c.value)
-            self.add_item(button)
+        rich = [c for c in choices if c.description]
+        plain = [c for c in choices if not c.description]
+
+        if rich:
+            select = discord.ui.Select(placeholder="Choisis un résultat…", min_values=1, max_values=1)
+            for c in rich:
+                select.add_option(
+                    label=c.label[:100], value=c.value[:100],
+                    description=(c.description[:100] or None), emoji=(c.emoji or None),
+                )
+            select.callback = self._select_cb(client)
+            self.add_item(select)
+            for c in plain:
+                self._add_button(client, c, row=1)
+        else:
+            for i, c in enumerate(choices):
+                self._add_button(client, c, row=min(i // 5, 4))
+
+    def _add_button(self, client: DiscordClient, c: Choice, row: int) -> None:
+        style = discord.ButtonStyle.danger if c.value == CANCEL else discord.ButtonStyle.secondary
+        button = discord.ui.Button(label=c.label[:80], custom_id=c.value, row=row, style=style)
+        button.callback = self._button_cb(client, c.value)
+        self.add_item(button)
 
     @staticmethod
-    def _make_callback(client: DiscordClient, value: str):
+    def _button_cb(client: DiscordClient, value: str):
         async def _cb(interaction: discord.Interaction) -> None:
             await client._on_button(interaction, value)
+
+        return _cb
+
+    @staticmethod
+    def _select_cb(client: DiscordClient):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await client._on_button(interaction, interaction.data["values"][0])
 
         return _cb
 
@@ -55,11 +84,35 @@ class DiscordContext(ClientContext):
     def _view(self, choices: list[Choice] | None):
         return _FlowView(self._client, choices) if choices else None
 
-    async def _send(self, text: str, choices: list[Choice] | None = None):
-        return await self._channel.send(text, view=self._view(choices))
+    @staticmethod
+    def _render(content: Content):
+        """Return (embed, text). A Card becomes an embed; a str becomes plain text."""
+        if isinstance(content, Card):
+            embed = discord.Embed(
+                title=content.title or None,
+                description=content.description or None,
+                color=content.color if content.color is not None else _EMBED_COLOR,
+            )
+            for name, value in content.fields:
+                embed.add_field(name=name, value=value, inline=True)
+            if content.thumbnail:
+                embed.set_thumbnail(url=content.thumbnail)
+            if content.footer:
+                embed.set_footer(text=content.footer)
+            return embed, None
+        return None, content
 
-    async def _edit(self, handle, text: str, choices: list[Choice] | None = None) -> None:
-        await handle.edit(content=text, view=self._view(choices))
+    async def _send(self, content: Content, choices: list[Choice] | None = None):
+        embed, text = self._render(content)
+        return await self._channel.send(content=text, embed=embed, view=self._view(choices))
+
+    async def _edit(self, handle, content: Content, choices: list[Choice] | None = None) -> None:
+        embed, text = self._render(content)
+        await handle.edit(content=text, embed=embed, view=self._view(choices))
+
+    async def _disable(self, handle) -> None:
+        with contextlib.suppress(Exception):
+            await handle.edit(view=None)
 
     async def _send_document(self, path: str, filename: str, caption: str) -> None:
         await self._channel.send(content=caption or None, file=discord.File(path, filename=filename))
