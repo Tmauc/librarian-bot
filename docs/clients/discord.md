@@ -11,9 +11,10 @@ and [configuration](../configuration.md).
 2. Left menu → **Bot**. Under **Privileged Gateway Intents**, enable **MESSAGE CONTENT
    INTENT** (required to read messages) → **Save Changes**.
 3. Still under **Bot**: **Reset Token** → **Copy** the token.
-4. Invite the bot: **OAuth2 → URL Generator**, check `bot`, then the permissions
-   **Send Messages**, **Read Message History**, **Attach Files**. Open the generated URL and
-   add the bot to your server (DMs also work).
+4. Invite the bot: **OAuth2 → URL Generator**. Scope: **`bot`** only (the bot's commands are
+   plain messages, not slash commands — no `applications.commands`). Permissions: **View
+   Channels**, **Send Messages**, **Read Message History**, **Attach Files**. Open the generated
+   URL and add the bot to a server (you need a shared server to DM the bot too).
 5. Get your user ID: Discord **Settings → Advanced → Developer Mode**, then right-click your
    name → **Copy User ID**.
 6. In `.env`:
@@ -46,3 +47,6 @@ also work.
 - Requires the **Message Content intent** (privileged) — the bot cannot read search queries
   without it.
 - Sessions are namespaced `discord:<id>` so they never collide with Telegram users.
+- TLS: discord.py (aiohttp) uses the default SSL context, which on the macOS python.org build
+  can lack CA certs ("certificate verify failed"). `main.py` points `SSL_CERT_FILE` at the
+  bundled `certifi` before importing the adapter, so this works out of the box.

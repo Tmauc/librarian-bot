@@ -37,9 +37,10 @@ ANNA_ARCHIVE_URL=https://<your-anna-instance>
 2. Left menu → **Bot**. Under **Privileged Gateway Intents**, turn on **MESSAGE CONTENT
    INTENT** → **Save Changes**. *(Required — the bot can't read your messages otherwise.)*
 3. Still on **Bot** → **Reset Token** → **Copy**. That's your `DISCORD_TOKEN`.
-4. Invite the bot: **OAuth2 → URL Generator** → check **bot**, then permissions **Send
-   Messages**, **Read Message History**, **Attach Files**. Open the generated URL and add the
-   bot to your server (or just DM it).
+4. Invite the bot: **OAuth2 → URL Generator**. Scope: **`bot`** only (not
+   `applications.commands` — our commands are plain messages). Permissions: **View Channels**,
+   **Send Messages**, **Read Message History**, **Attach Files**. Open the generated URL and add
+   the bot to a server (you need a shared server before you can DM it).
 5. Your user ID: Discord **Settings → Advanced → Developer Mode** (on), then right-click your
    name → **Copy User ID**. That's your `DISCORD_ALLOWED_IDS`.
 
