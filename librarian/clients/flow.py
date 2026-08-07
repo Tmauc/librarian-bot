@@ -16,7 +16,7 @@ import time
 
 from librarian import config
 from librarian.clients.base import CANCEL, SKIP, Card, Choice, ClientContext
-from librarian.core import conversion, download_service, planner, prefs, scanning, search_service
+from librarian.core import conversion, download_service, planner, prefs, scanning, search_service, series
 from librarian.destinations import registry as destinations
 from librarian.destinations.base import Destination
 
@@ -200,35 +200,71 @@ def _looks_like_batch(query: str) -> bool:
 
 
 async def _run_batch(ctx: ClientContext, plan) -> None:
-    """Search the series in the real catalogue, let the user multi-select the volumes,
-    then download every selected one to a single destination. No LLM-invented titles."""
-    await ctx.say(f"🔎 Recherche de « {plan.query} »…")
-    results = await search_service.search(plan.query, ctx.max_file_size)
-    if not results:
-        await ctx.say(f"😕 Rien trouvé pour « {plan.query} ». Essaie une autre formulation.")
-        return
+    """Identify the series (Wikidata → canonical ordered volumes), find each volume's
+    file in the catalogue, and let the user multi-select which tomes to download. Falls
+    back to raw catalogue results if the series is unknown to Wikidata."""
+    await ctx.say(f"🔎 Identification de « {plan.query} »…")
+    vols = await series.volumes(plan.query)
+    entries = await _series_entries(ctx, plan, vols) if vols else []
 
-    card = Card(
-        title=f"🧠 {plan.query}",
-        description="Coche les tomes que tu veux télécharger :",
-        footer=f"{len(results)} résultat(s) trouvé(s)",
-    )
-    picked = await ctx.ask_multi_choice(card, [_result_choice(i, results[i]) for i in range(len(results))])
-    if not picked:
+    if entries:  # clean, ordered "Tome N: real file"
+        choices = [Choice(f"{i + 1}. {label}", str(i), description=_meta_line(r)) for i, (label, r) in enumerate(entries)]
+        card = Card(
+            title=f"🧠 {plan.query}",
+            description=f"{len(entries)} tome(s) trouvé(s) — coche ceux à télécharger :",
+            footer="Série identifiée via Wikidata",
+        )
+        picked = await ctx.ask_multi_choice(card, choices)
+        chosen = [entries[int(v)][1] for v in picked]
+    else:  # fallback: unknown series → raw catalogue, user sorts it out
+        await ctx.say(f"🔎 Recherche de « {plan.query} »…")
+        results = await search_service.search(plan.query, ctx.max_file_size)
+        if not results:
+            await ctx.say(f"😕 Rien trouvé pour « {plan.query} ».")
+            return
+        card = Card(title=f"🧠 {plan.query}", description="Coche les tomes à télécharger :", footer=f"{len(results)} résultat(s)")
+        picked = await ctx.ask_multi_choice(card, [_result_choice(i, results[i]) for i in range(len(results))])
+        chosen = [results[int(v)] for v in picked]
+
+    if not chosen:
         await ctx.say("🔍 Aucun tome sélectionné. À bientôt !")
         return
 
     destination = await _pick_destination(ctx)
     desired_fmt = plan.desired_format if plan.desired_format in config.ALLOWED_FORMATS else config.ALLOWED_FORMATS[0]
-
     done = 0
-    for value in picked:
-        r = results[int(value)]
+    for r in chosen:
         await ctx.say(f"📖 {r.title[:60]}")
         await _deliver(ctx, [r], 0, desired_fmt, destination)
         done += 1
-
     await ctx.say(f"✅ Terminé — {done} livre(s) livré(s).")
+
+
+async def _series_entries(ctx: ClientContext, plan, vols: list[str]):
+    """For each canonical volume, find the best matching catalogue file. Volumes with no
+    plausible match (e.g. Wikidata noise: prologues, foreign-language editions) are dropped."""
+    searches = await asyncio.gather(
+        *[search_service.search(f"{plan.query} {v}", ctx.max_file_size) for v in vols]
+    )
+    entries = []
+    for v, results in zip(vols, searches, strict=True):
+        r = _best_match(v, results)
+        if r:
+            entries.append((v, r))
+    return entries
+
+
+def _best_match(vol: str, results):
+    """Top result whose title shares a distinctive word with the volume title, else None."""
+    if not results:
+        return None
+    words = {w for w in re.sub(r"[^\w]", " ", vol.lower()).split() if len(w) > 3}
+    if not words:
+        return results[0]
+    for r in results[:5]:
+        if any(w in r.title.lower() for w in words):
+            return r
+    return None
 
 
 # ===========================================================================

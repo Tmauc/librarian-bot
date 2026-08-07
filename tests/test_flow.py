@@ -172,28 +172,72 @@ def test_search_offers_and_uses_email_destination(monkeypatch):
     assert not ctx.docs, "email destination must not upload to the chat"
 
 
-def test_batch_multiselect_downloads_chosen_volumes(monkeypatch):
-    from librarian.core import planner
+def test_batch_fallback_multiselect(monkeypatch):
+    """Series unknown to Wikidata → raw catalogue multi-select."""
+    from librarian.core import planner, series
     from librarian.core.models import Plan
 
     async def fake_plan(request):
         return Plan(query="Ma série", series=True, desired_format="epub")
 
+    async def no_vols(name):
+        return []
+
     async def scenario():
         registry._ALL[:] = [StubSource(_epub_results())]  # 2 results
         monkeypatch.setattr(planner, "enabled", lambda: True)
         monkeypatch.setattr(planner, "plan", fake_plan)
+        monkeypatch.setattr(series, "volumes", no_vols)
         await prefs.set("test:1", "format", "epub")
         s = Session("test:1")
         ctx = FakeContext(s)
-        # "intégrale" triggers the batch → search → multi-select (base default: pick 0 then 1,
-        # which empties the list and ends selection) → single destination → downloads both
         await drive(s, flow.run_search(ctx, "l'intégrale de ma série"), [("choice", "0"), ("choice", "1")])
         return ctx
 
     ctx = asyncio.run(scenario())
-    assert len(ctx.docs) == 2  # both selected volumes downloaded and delivered
+    assert len(ctx.docs) == 2
     assert "Terminé" in ctx.messages[-1]
+
+
+def test_batch_series_from_wikidata(monkeypatch):
+    """Known series → Wikidata volumes matched to catalogue files, then multi-select."""
+    from librarian.core import planner, series
+    from librarian.core.models import Plan, SearchResult
+
+    async def fake_plan(request):
+        return Plan(query="Ma série", series=True, desired_format="epub")
+
+    async def fake_vols(name):
+        return ["Alpha", "Beta"]
+
+    class SeriesStub(Source):
+        name = "stub"
+
+        async def search(self, query):
+            for word in ("Alpha", "Beta"):
+                if word in query:
+                    return [SearchResult("stub", f"Ma série {word}", "epub", ref={})]
+            return []
+
+        async def download(self, result, on_progress=None, max_bytes=0):
+            path = tempfile.mktemp(suffix=".epub", prefix="librarian_")
+            with open(path, "wb") as f:
+                f.write(b"x" * 5000)
+            return path
+
+    async def scenario():
+        registry._ALL[:] = [SeriesStub()]
+        monkeypatch.setattr(planner, "enabled", lambda: True)
+        monkeypatch.setattr(planner, "plan", fake_plan)
+        monkeypatch.setattr(series, "volumes", fake_vols)
+        await prefs.set("test:1", "format", "epub")
+        s = Session("test:1")
+        ctx = FakeContext(s)
+        await drive(s, flow.run_search(ctx, "l'intégrale de ma série"), [("choice", "0"), ("choice", "1")])
+        return ctx
+
+    ctx = asyncio.run(scenario())
+    assert len(ctx.docs) == 2  # both matched volumes downloaded
 
 
 def test_settings_changes_format():

@@ -10,20 +10,25 @@ See also: [architecture](architecture.md) · [configuration](configuration.md).
 ## How it works
 
 1. A message that looks like a multi-book request (contains *intégrale*, *tous les
-   tomes*, *saga*, *trilogie*…) is sent to a local LLM
-   ([`core/planner.py`](../librarian/core/planner.py)).
-2. The model returns a small JSON **Plan**: `{query, language, format, series}` — the
-   **series/book name** (cleaned of « je veux… en VF »), a language hint, and whether
-   it's a multi-book request. **It does NOT enumerate volumes** — a small local model
-   hallucinates titles for niche series.
-3. The flow searches the **real catalogue** (Anna's Archive) for that query, and the
-   user **multi-selects** the actual volumes to download. Each selected book is then
-   downloaded and delivered to one destination.
+   tomes*, *saga*, *trilogie*…) goes to a local LLM
+   ([`core/planner.py`](../librarian/core/planner.py)), which returns a small JSON
+   **Plan** `{query, language, format, series}` — the **series/book name** (cleaned of
+   « je veux… en VF ») + hints. It does **not** enumerate volumes (a small model
+   hallucinates them for niche series).
+2. The series name is resolved against **Wikidata**
+   ([`core/series.py`](../librarian/core/series.py)) to get the **canonical, ordered
+   volume list** — reliable even for niche series (free, no key).
+3. Each canonical volume is searched in the **real catalogue** (Anna's Archive); the best
+   matching file is kept (volumes that match nothing — Wikidata noise like prologues or
+   foreign editions — are dropped).
+4. The user **multi-selects** which tomes to download from that clean ordered list; each
+   is downloaded and delivered to one destination.
 
-Plain single-title searches (`dune`) skip the LLM entirely — same behaviour as before.
+If Wikidata doesn't know the series, it falls back to a raw catalogue search + multi-select.
+Plain single-title searches (`dune`) skip all of this.
 
-Because the model only *extracts an intent* (not book knowledge), even a small model
-does the job; the real volumes always come from the catalogue.
+The LLM only *extracts an intent* and Wikidata provides the *knowledge*, so even a small
+model does the job and nothing is invented.
 
 ## Setup (Ollama)
 
