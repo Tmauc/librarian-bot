@@ -38,11 +38,24 @@ Plain single-title searches (`dune`) skip the LLM entirely — same behaviour as
 | `LLM_MODEL` | Ollama model name. Empty = disabled (plain search). |
 | `LLM_BASE_URL` | Ollama server URL (default `http://localhost:11434`). |
 
+## Model choice (benchmarked)
+
+Tested on series-enumeration prompts (LOTR, Hunger Games, Harry Potter, ASoIaF) + single
+titles, at `temperature=0`:
+
+| Model | Verdict |
+|---|---|
+| **qwen2.5:3b** | ✅ **Best** — correct canonical titles (ASoIaF's 5 books spot-on), stable, ~1-2 s/query after warmup. **Recommended.** |
+| **gemma2:2b** | 🥈 Very good and lighter (1.6 GB, faster) — Hunger Games exact, LOTR right. Good low-resource choice. |
+| llama3.2:3b | 🟡 Mixed — misses some French series, hallucinates Harry Potter titles. |
+| phi3.5 | ❌ Confident hallucinations (wrong titles that *look* real) — avoid. |
+| qwen2.5:≤1.5b | ❌ Too weak — garbage enumeration. |
+
 ## Notes
 
-- **Model size matters.** A 0.5B model returns nonsense for enumeration; a 3B handles
-  famous series well. Obscure series may still be missed — the batch just skips a
-  volume it can't find.
+- **Model size matters.** ~3B is the sweet spot; sub-2B models hallucinate volume lists.
+  Obscure series may still be missed — the batch just skips a volume it can't find. Anna's
+  fuzzy search tolerates the model's title formatting (e.g. a "Livre 1:" prefix).
 - **Graceful fallback.** If `LLM_MODEL` is unset or the server is unreachable, the bot
   does a normal single search — no crash, no hang beyond the request timeout.
 - **Cross-platform.** Ollama runs the model locally; on a Raspberry Pi prefer a small
