@@ -41,6 +41,7 @@ least one client** (Telegram and/or Discord).
 | Variable | Description |
 |---|---|
 | `VIRUSTOTAL_API_KEY` | Scan files before sending ([destinations](destinations.md)). Empty = disabled. |
+| `LLM_MODEL` / `LLM_BASE_URL` | Local LLM planner ([intelligence](intelligence.md)) for natural-language / multi-book requests. Empty `LLM_MODEL` = disabled. |
 | `GITHUB_REPO` | `owner/repo` watched for new releases (Telegram notification). Empty = disabled. |
 | `USER_PREFS_FILE` | Path to the per-user prefs JSON. Defaults next to the repo root; set in Docker. |
 

@@ -30,6 +30,10 @@ Where books come from. Each implements the `Source` contract and is registered o
 - [Anna's Archive](sources/anna-archive.md)
 - [Prowlarr](sources/prowlarr.md)
 
+## Intelligence (optional)
+
+- [Local-LLM planner — natural-language & multi-book requests](intelligence.md)
+
 ## Destinations (where the file ends up)
 
 Pluggable delivery targets — this chat, email, Send to Kindle, and easy to extend.
