@@ -1,0 +1,36 @@
+services:
+  bot:
+    image: ghcr.io/owner/librarian-bot:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - USER_PREFS_FILE=data/user_prefs.json
+    volumes:
+      - ${BOOKS_DOWNLOAD_PATH}:${BOOKS_DOWNLOAD_PATH}:ro
+      - ./data:/app/data
+    networks:
+      - internal
+    depends_on:
+      - telegram-bot-api
+
+  telegram-bot-api:
+    image: ghcr.io/tdlib/telegram-bot-api:latest
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    networks:
+      - internal
+    volumes:
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
+    command:
+      - --api-id=${LOCAL_API_ID}
+      - --api-hash=${LOCAL_API_HASH}
+      - --local
+      - --http-port=8081
+      - --dir=/var/lib/telegram-bot-api
+
+networks:
+  internal:
+
+volumes:
+  telegram-bot-api-data:
