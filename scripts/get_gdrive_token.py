@@ -5,17 +5,18 @@ Prompts for your OAuth *Desktop app* client id/secret, opens a browser to author
 the ``drive.file`` scope, catches the redirect on localhost, exchanges the code, and
 prints the three lines to paste into your ``.env``.
 
-Usage:
+Dependency-free (standard library only), so it runs with any Python:
     python scripts/get_gdrive_token.py
 """
 
 import http.server
+import json
 import secrets
 import socketserver
+import urllib.error
 import urllib.parse
+import urllib.request
 import webbrowser
-
-import httpx
 
 SCOPE = "https://www.googleapis.com/auth/drive.file"
 HOST, PORT = "127.0.0.1", 8765
@@ -67,19 +68,23 @@ def main() -> None:
     if not result.get("code") or result.get("state") != state:
         raise SystemExit("Authorization failed (no code, or state mismatch).")
 
-    resp = httpx.post(
-        TOKEN_URL,
-        data={
+    body = urllib.parse.urlencode(
+        {
             "code": result["code"],
             "client_id": client_id,
             "client_secret": client_secret,
             "redirect_uri": REDIRECT_URI,
             "grant_type": "authorization_code",
-        },
-        timeout=30,
-    )
-    resp.raise_for_status()
-    refresh_token = resp.json().get("refresh_token")
+        }
+    ).encode()
+    request = urllib.request.Request(TOKEN_URL, data=body, method="POST")  # noqa: S310 (fixed https URL)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as resp:  # noqa: S310
+            tok = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"Token exchange failed ({e.code}): {e.read().decode(errors='ignore')}") from e
+
+    refresh_token = tok.get("refresh_token")
     if not refresh_token:
         raise SystemExit(
             "No refresh_token returned. Revoke this app's access at "
