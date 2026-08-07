@@ -93,7 +93,10 @@ async def _download_direct(url: str, ext: str, progress_callback=None, max_bytes
                                     await progress_callback(downloaded, total)
                                 except Exception:
                                     pass
-            except Exception:
+            except BaseException:
+                # BaseException (not just Exception) so asyncio.CancelledError —
+                # raised when the user taps Annuler mid-stream — also cleans up the
+                # partial temp file instead of leaking it.
                 if path:
                     try:
                         os.remove(path)

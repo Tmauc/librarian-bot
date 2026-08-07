@@ -285,3 +285,13 @@ async def _stream_resp_to_file(resp, ext: str, progress_callback=None, max_bytes
             except Exception:
                 pass
         return None
+    except BaseException:
+        # asyncio.CancelledError (user tapped Annuler) is a BaseException, not an
+        # Exception: clean up the partial temp file, then let cancellation propagate
+        # instead of swallowing it into a None "soft failure".
+        if path:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        raise
