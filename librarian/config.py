@@ -28,7 +28,7 @@ def _int_set(raw: str) -> set[int]:
 # --- Shared / product-wide -------------------------------------------------
 VERSION = "2.4.0"
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "owner/librarian-bot")
-MAX_RESULTS = 10
+MAX_RESULTS = 25  # cap on results shown (also the max options in a Discord select menu)
 MAX_QUERY_LENGTH = 200
 RATE_LIMIT_SECONDS = 5
 ALLOWED_FORMATS: list[str] = [

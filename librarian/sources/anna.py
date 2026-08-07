@@ -211,7 +211,7 @@ class AnnaArchiveSource(Source):
                 description=meta["description"],
                 ref={"md5": md5},
             )
-            if len(seen) >= 10:
+            if len(seen) >= 60:  # gather generously; search_service dedups + caps at MAX_RESULTS
                 break
         return list(seen.values())
 
