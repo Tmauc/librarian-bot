@@ -58,6 +58,16 @@ _CANCEL_KB = InlineKeyboardMarkup([[InlineKeyboardButton("⛔ Annuler", callback
 _notified_update: str | None = None  # tag already notified in this process run
 
 
+# Reject whitespace and backticks (backticks would break the Markdown echo of the
+# address); cap length per RFC 5321. Not a full RFC validator — just enough to keep
+# a book title or an injection payload from being stored as an "email".
+_EMAIL_RE = re.compile(r"^[^@\s`]+@[^@\s`]+\.[^@\s`]+$")
+
+
+def _is_valid_email(value: str) -> bool:
+    return len(value) <= 254 and bool(_EMAIL_RE.match(value))
+
+
 def _fmt_size(size_bytes: int) -> str:
     if not size_bytes:
         return "?"
@@ -133,6 +143,9 @@ async def check_for_updates(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update):
         return
+
+    # Leaving a half-finished email/Kindle prompt: don't keep swallowing input.
+    context.user_data.pop("waiting_for", None)
 
     user_id = update.effective_user.id
     user_prefs = await prefs.get(user_id)
@@ -248,6 +261,9 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not _is_allowed(update):
         return
 
+    # Reset any pending email/Kindle prompt so /settings is always a clean entry.
+    context.user_data.pop("waiting_for", None)
+
     user_id = update.effective_user.id
     user_prefs = await prefs.get(user_id)
 
@@ -278,6 +294,9 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if not _is_allowed(update):
         return
+
+    # Also the "cancel" target of the email/Kindle prompts: clear pending input.
+    context.user_data.pop("waiting_for", None)
 
     user_id = update.effective_user.id
     user_prefs = await prefs.get(user_id)
@@ -354,7 +373,8 @@ async def handle_setemail_prompt(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     context.user_data["waiting_for"] = "email"
-    await query.edit_message_text("📧 Envoie-moi ton adresse email :")
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Annuler", callback_data="open_settings")]])
+    await query.edit_message_text("📧 Envoie-moi ton adresse email :", reply_markup=keyboard)
 
 
 async def handle_setkindl_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -365,11 +385,13 @@ async def handle_setkindl_prompt(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     context.user_data["waiting_for"] = "kindle_email"
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Annuler", callback_data="open_settings")]])
     await query.edit_message_text(
         "📖 Envoie-moi ton adresse Kindle :\n\n"
         "⚠️ *Note :* Les vieux Kindle ne supportent pas EPUB.\n"
         "Utilise *MOBI* ou *AZW3* pour une meilleure compatibilité.",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
+        reply_markup=keyboard,
     )
 
 
@@ -466,8 +488,8 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text("❌ Adresse vide. Essaie à nouveau.")
             return
 
-        # Simple email validation
-        if not re.match(r"[^@]+@[^@]+\.[^@]+", user_input):
+        # Email validation (length-capped, no whitespace/backticks)
+        if not _is_valid_email(user_input):
             await update.message.reply_text("❌ Adresse email invalide. Essaie à nouveau.")
             return
 
@@ -555,12 +577,14 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     all_results = sorted(direct, key=_sort_key) + torrents
     filtered = [r for r in all_results if not (r.get("size_bytes", 0) > MAX_FILE_SIZE)]
 
-    # Deduplicate by normalized title — keep first (best) occurrence per title
-    # Use first 35 chars to catch slight title variants
+    # Deduplicate by full normalized title — keep first (best) occurrence.
+    # A 35-char prefix (previous approach) collided distinct volumes of a series
+    # ("… Volume 1" vs "… Volume 2"); the full normalized title still removes genuine
+    # intra-source duplicates (identical titles) without dropping real results.
     seen_titles: set[str] = set()
     results = []
     for r in filtered:
-        norm = re.sub(r"[^\w]", "", (r.get("title") or "")).lower()[:35]
+        norm = re.sub(r"[^\w]", "", (r.get("title") or "")).lower()
         if norm and norm in seen_titles:
             continue
         if norm:
@@ -574,7 +598,6 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Check if there are epub results
     has_epub = any(r.get("ext") == "epub" for r in results)
-    epub_only_results = [r for r in results if r.get("ext") == "epub"]
     non_epub_results = [r for r in results if r.get("ext") != "epub"]
 
     if not results:
@@ -669,18 +692,24 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     result = results[idx]
-    # Show format menu if multiple formats available
-    available_formats = {result.get("ext")}
-    if len(ALLOWED_FORMATS) > 1 and available_formats & set(ALLOWED_FORMATS):
+    src_ext = result.get("ext") or "epub"
+    # Only an EPUB source can be converted (epub→pdf/mobi/azw3). A non-epub source
+    # is delivered as-is, so the only format we can honestly offer is its own —
+    # otherwise the user picks "MOBI" on a PDF and silently receives a PDF.
+    if src_ext == "epub":
+        offerable = list(ALLOWED_FORMATS)
+    else:
+        offerable = [src_ext]
+
+    if len(offerable) > 1:
         title = result.get("title") or "ce livre"
+        _labels = {"epub": "📥 EPUB", "pdf": "📄 PDF", "mobi": "📱 MOBI", "azw3": "📘 AZW3"}
         fmt_buttons = [
-            InlineKeyboardButton("📥 EPUB", callback_data=f"dlfmt_epub_{idx}") if "epub" in ALLOWED_FORMATS else None,
-            InlineKeyboardButton("📄 PDF", callback_data=f"dlfmt_pdf_{idx}") if "pdf" in ALLOWED_FORMATS else None,
-            InlineKeyboardButton("📱 MOBI", callback_data=f"dlfmt_mobi_{idx}") if "mobi" in ALLOWED_FORMATS else None,
-            InlineKeyboardButton("📘 AZW3", callback_data=f"dlfmt_azw3_{idx}") if "azw3" in ALLOWED_FORMATS else None,
+            InlineKeyboardButton(_labels[f], callback_data=f"dlfmt_{f}_{idx}")
+            for f in offerable if f in _labels
         ]
         keyboard = InlineKeyboardMarkup([
-            [b for b in fmt_buttons if b],
+            fmt_buttons,
             [InlineKeyboardButton("⛔ Annuler", callback_data="cancel_dl")],
         ])
         await query.edit_message_text(
@@ -689,8 +718,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    # Format unique configuré : vérifier si on doit quand même demander la destination
-    desired_fmt = ALLOWED_FORMATS[0] if ALLOWED_FORMATS else "epub"
+    # A single deliverable format: skip the format question, maybe ask destination.
+    desired_fmt = offerable[0] if offerable else "epub"
     context.user_data[f"fmt_{idx}"] = desired_fmt
 
     user_prefs = await prefs.get(update.effective_user.id)
@@ -818,15 +847,27 @@ async def handle_dest_kindle(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await _do_download(query, context, idx, desired_fmt=fmt, destination="kindle")
 
 
-async def _do_download(query, context: ContextTypes.DEFAULT_TYPE, idx: int, desired_fmt: str = "epub", destination: str = "telegram", to_pdf: bool = False) -> None:
+async def _do_download(query, context: ContextTypes.DEFAULT_TYPE, idx: int, desired_fmt: str = "epub", destination: str = "telegram") -> None:
+    # Guard against a second concurrent download for the same user (e.g. double-tap).
+    # Set synchronously — no await between the check and the set — so two callbacks
+    # can't both pass. Now that concurrent_updates is on, this race is reachable.
+    if context.user_data.get("dl_in_progress"):
+        await query.edit_message_text(
+            "⏳ Un téléchargement est déjà en cours. Attends la fin ou annule-le d'abord."
+        )
+        return
+    context.user_data["dl_in_progress"] = True
+    try:
+        await _do_download_inner(query, context, idx, desired_fmt, destination)
+    finally:
+        context.user_data.pop("dl_in_progress", None)
+
+
+async def _do_download_inner(query, context: ContextTypes.DEFAULT_TYPE, idx: int, desired_fmt: str = "epub", destination: str = "telegram") -> None:
     results = context.user_data.get("results", [])
     if idx >= len(results):
         await query.edit_message_text("❌ Résultat expiré, refais une recherche.")
         return
-
-    # Convert desired format to to_pdf flag for backwards compatibility
-    if not to_pdf:
-        to_pdf = desired_fmt == "pdf"
 
     def _progress_bar(pct: int) -> str:
         filled = pct // 10
@@ -841,9 +882,12 @@ async def _do_download(query, context: ContextTypes.DEFAULT_TYPE, idx: int, desi
             ext = result.get("ext") or "epub"
             is_torrent = result.get("is_torrent", False)
 
-            # Skip non-EPUB for conversion (unless PDF, then EPUB is OK)
-            # We always want to download EPUB for conversion to MOBI/AZW3/PDF
-            if desired_fmt in ("mobi", "azw3", "pdf") and ext not in ("epub", "pdf"):
+            # Only an EPUB converts to MOBI/AZW3; a PDF source can't become either,
+            # so don't let auto-retry silently deliver a PDF when MOBI/AZW3 was asked.
+            # A PDF target accepts an EPUB (to convert) or a PDF (sent as-is).
+            if desired_fmt in ("mobi", "azw3") and ext != "epub":
+                continue
+            if desired_fmt == "pdf" and ext not in ("epub", "pdf"):
                 continue
 
             if i > start_idx:
@@ -1120,15 +1164,38 @@ async def handle_cancel_download(update: Update, context: ContextTypes.DEFAULT_T
 async def handle_cancel_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
+    if not _is_allowed(update):
+        return
     context.user_data.pop("results", None)
     await query.edit_message_text("🔍 Recherche annulée. Envoie un nouveau titre quand tu veux !")
+
+
+async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Catch-all: log the traceback and give the user a plain-text notice.
+
+    Without this, an unhandled exception in any handler is only logged by PTB and
+    the user just sees a frozen message with no feedback.
+    """
+    logger.error("Unhandled exception in handler", exc_info=context.error)
+    try:
+        if isinstance(update, Update) and update.effective_message is not None:
+            # Plain text — never Markdown here, to avoid a second failure while
+            # reporting the first (e.g. an unbalanced backtick in the payload).
+            await update.effective_message.reply_text(
+                "😕 Une erreur inattendue est survenue. Réessaie dans un instant."
+            )
+    except Exception:
+        pass
 
 
 def main() -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    builder = Application.builder().token(TELEGRAM_TOKEN)
+    # concurrent_updates(True): sans ça, python-telegram-bot traite les updates en
+    # série (sémaphore de taille 1). Un téléchargement long bloquerait alors TOUS
+    # les autres updates — y compris le callback « Annuler » — jusqu'à sa fin.
+    builder = Application.builder().token(TELEGRAM_TOKEN).concurrent_updates(True)
     if LOCAL_API_SERVER:
         builder = (
             builder
@@ -1162,6 +1229,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_onb_fmt, pattern=r"^onb_fmt_\w+$"))
     app.add_handler(CallbackQueryHandler(handle_onb_skip_email, pattern=r"^onb_skip_email$"))
     app.add_handler(CallbackQueryHandler(handle_onb_skip_kindle, pattern=r"^onb_skip_kindle$"))
+
+    app.add_error_handler(_on_error)
 
     if GITHUB_REPO:
         app.job_queue.run_repeating(check_for_updates, interval=86400, first=30)
