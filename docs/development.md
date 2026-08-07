@@ -15,7 +15,7 @@ Configure at least one client in `.env` — see [configuration](configuration.md
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest         # 77 tests
+python -m pytest         # 81 tests
 ruff check librarian main.py tests
 ```
 

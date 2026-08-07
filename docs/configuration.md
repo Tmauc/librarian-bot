@@ -33,6 +33,8 @@ least one client** (Telegram and/or Discord).
 | `SMTP_HOST` / `SMTP_PORT` | [destinations](destinations.md) | SMTP server (default `smtp.gmail.com` / `587`). |
 | `SMTP_USER` / `SMTP_PASSWORD` | delivery | SMTP login. Gmail: use an App Password. |
 | `SMTP_FROM` | delivery | Sender address (defaults to `SMTP_USER`). |
+| `DROPBOX_APP_KEY` / `DROPBOX_APP_SECRET` / `DROPBOX_REFRESH_TOKEN` / `DROPBOX_FOLDER` | [destinations](destinations.md) | Dropbox cloud destination (single account). Empty = disabled. |
+| `GDRIVE_CLIENT_ID` / `GDRIVE_CLIENT_SECRET` / `GDRIVE_REFRESH_TOKEN` / `GDRIVE_FOLDER_ID` | [destinations](destinations.md) | Google Drive cloud destination (single account). Empty = disabled. |
 
 ## Other
 

@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.3.0] — 2026-08-07
+
+### Added
+
+- **Cloud destinations: Dropbox and Google Drive.** Two new delivery targets that upload the
+  book to a cloud folder — point a **Kobo** (incl. Clara Colour) at the same folder and it syncs
+  wirelessly. Single-account auth via `.env` (app credentials + refresh token), implemented with
+  plain httpx (no new dependency). They appear in the destination menu only once configured. See
+  [docs/destinations.md](docs/destinations.md) for setup (`DROPBOX_*` / `GDRIVE_*`).
+
+---
+
 ## [2.2.0] — 2026-08-07
 
 ### Changed

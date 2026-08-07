@@ -15,6 +15,8 @@ one's `deliver()`.
 | `here` | 📬 Ici (ce chat) | always | the active client uploads the file (`ctx.send_document`) |
 | `email` | 📧 Email | SMTP configured **and** the user has an email on file | plain SMTP attachment |
 | `kindle` | 📖 Kindle | SMTP configured **and** the user has a Kindle address | SMTP with the `convert` subject (Send to Kindle) |
+| `dropbox` | ☁️ Dropbox | Dropbox credentials configured | uploads to a Dropbox folder (a Kobo pointed at it syncs the book) |
+| `gdrive` | ☁️ Google Drive | Google Drive credentials configured | uploads to a Drive folder (same idea for Kobo/other readers) |
 
 The chat destination uses the active client's file-size limit — see
 [client limits](clients/README.md#per-platform-upload-limits). Email/Kindle are platform-neutral.
@@ -62,6 +64,53 @@ SMTP is configured globally in `.env`; each user sets their own address via `/se
 (Manage Your Content and Devices → Preferences → Personal Document Settings). Amazon converts
 the file, so [Calibre](../README.md) is not needed for Kindle.
 
+## Cloud destinations setup (Dropbox / Google Drive)
+
+These upload the book to a folder in **one** cloud account (configured in `.env`, no
+per-user OAuth). Point your e-reader at the same folder — a **Kobo** (incl. the Clara
+Colour) has built-in Dropbox/Google Drive sync, so the book appears wirelessly. They
+only show in the menu once their credentials are set.
+
+### Dropbox
+
+Single app + a long-lived refresh token:
+
+1. Create an app at the [Dropbox App Console](https://www.dropbox.com/developers/apps)
+   (Scoped access, App folder or Full Dropbox). Note the **App key** and **App secret**.
+2. Give it the `files.content.write` permission.
+3. Generate a **refresh token** (OAuth `token_access_type=offline`). A quick way: run the
+   authorize URL, get a `code`, then exchange it once for a refresh token.
+4. Fill in `.env`:
+   ```
+   DROPBOX_APP_KEY=...
+   DROPBOX_APP_SECRET=...
+   DROPBOX_REFRESH_TOKEN=...
+   DROPBOX_FOLDER=/Kobo        # where files land (must exist or be auto-created)
+   ```
+
+| Variable | Description |
+|---|---|
+| `DROPBOX_APP_KEY` / `DROPBOX_APP_SECRET` | From the Dropbox app. |
+| `DROPBOX_REFRESH_TOKEN` | Long-lived OAuth refresh token. |
+| `DROPBOX_FOLDER` | Target folder path (default `/librarian-bot`). |
+
+### Google Drive
+
+1. In [Google Cloud Console](https://console.cloud.google.com/): create OAuth client
+   credentials (Desktop), enable the **Drive API**. Note the **Client ID/Secret**.
+2. Obtain a **refresh token** for the `drive.file` scope (OAuth Playground or a one-off script).
+3. Get the destination **folder ID** (from the folder's URL). Fill in `.env`:
+   ```
+   GDRIVE_CLIENT_ID=...
+   GDRIVE_CLIENT_SECRET=...
+   GDRIVE_REFRESH_TOKEN=...
+   GDRIVE_FOLDER_ID=...        # optional; omit for Drive root
+   ```
+
+Both are implemented with plain httpx (no extra dependency): refresh the access token,
+then upload. See [`dropbox.py`](../librarian/destinations/dropbox.py) /
+[`gdrive.py`](../librarian/destinations/gdrive.py).
+
 ## VirusTotal scan (optional)
 
 If `VIRUSTOTAL_API_KEY` is set, the file is scanned before any destination
@@ -82,6 +131,6 @@ The bot delivers the file; you load it onto the device. Pick the format accordin
 
 Notes for **Kobo**: EPUB is native and the only format that uses the Clara Colour's colour
 screen; **AZW3 is the only unsupported format**. There is no email-to-device endpoint like
-Send to Kindle — use the `email` destination and drop the file into the Kobo's Dropbox/Google
-Drive folder, or transfer over USB. A dedicated "Kobo" destination isn't needed (EPUB is native);
-if you ever want automatic cloud drop-off, that's a natural [new destination](#adding-a-destination).
+Send to Kindle — instead use the **`dropbox`** or **`gdrive`** destination (see setup above):
+the bot drops the book into a cloud folder and the Kobo's built-in Dropbox/Google Drive sync
+picks it up wirelessly. USB transfer also works.
