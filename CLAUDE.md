@@ -42,18 +42,23 @@ librarian/
   clients/
     base.py            # ClientContext port + Session (resumable, future-based)
     flow.py            # the ENTIRE conversation UX, platform-agnostic
-    telegram/adapter.py# the ONLY Telegram-specific code
-main.py                # wires enabled adapters to the core
+    telegram/adapter.py# Telegram-specific code (+ create_application, update job)
+    discord/adapter.py # Discord-specific code (discord.py Views/interactions)
+main.py                # starts every configured client (Telegram and/or Discord)
 ```
+
+`main.py` runs all configured clients concurrently in one asyncio loop: it starts
+the Telegram `Application` (programmatic initialize/start/start_polling) and/or
+`DiscordClient.start()`. Configure at least one of `TELEGRAM_TOKEN` / `DISCORD_TOKEN`.
 
 ### Two extension axes (the whole point)
 - **Add a download source**: create `librarian/sources/<name>.py` with a `Source`
   subclass, add it to `registry._ALL`. No core/client change.
-- **Add a client platform** (Discord/WhatsApp): create an adapter under
-  `librarian/clients/` implementing `ClientContext` (`_send`/`_edit`/
-  `_send_document`/`max_file_size`) and routing incoming events into the
+- **Add a client platform** (Discord is the reference impl; WhatsApp next): create
+  an adapter under `librarian/clients/` implementing `ClientContext` (`_send`/
+  `_edit`/`_send_document`/`max_file_size`) and routing incoming events into the
   `Session` (`resolve_text`/`resolve_choice`/`cancel`); start it in `main.py`.
-  No core/flow change.
+  No core/flow change. Telegram and Discord adapters are ~120 lines each.
 
 ### Conversation model
 `flow.py` is a set of linear coroutines (`run_start`, `run_settings`,

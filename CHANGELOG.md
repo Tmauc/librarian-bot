@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.1.0] — 2026-08-07
+
+### Added
+
+- **Discord client.** A Discord adapter (`librarian/clients/discord/`) built on the same generic flow — the first proof of the ports-&-adapters seam: no core, flow, or source code changed. Configure with `DISCORD_TOKEN` / `DISCORD_ALLOWED_IDS` (enable the Message Content intent in the Discord Developer Portal). Uploads are capped at Discord's 25 MB.
+- `main.py` now starts **every configured client** (Telegram and/or Discord) concurrently in one event loop; configure at least one.
+
+---
+
 ## [2.0.0] — 2026-08-07
 
 ### Changed

@@ -77,12 +77,19 @@ ALLOWED_USER_IDS=123456789
 ANNA_ARCHIVE_URL=
 ```
 
-**Required variables:**
+**Required variables** (configure at least one client — Telegram and/or Discord):
 
 | Variable | Description |
 |---|---|
 | `TELEGRAM_TOKEN` | The token you got from BotFather in Step 1.1 |
 | `ALLOWED_USER_IDS` | Your Telegram user ID from Step 1.2. Multiple IDs: `111,222,333` |
+
+**Optional — Discord client** (runs alongside Telegram, or on its own):
+
+| Variable | Description |
+|---|---|
+| `DISCORD_TOKEN` | Bot token from the [Discord Developer Portal](https://discord.com/developers/applications). Also enable the **Message Content Intent** under the bot's settings. Leave empty to disable. |
+| `DISCORD_ALLOWED_IDS` | Allowed numeric Discord user IDs (comma-separated). |
 
 **Optional — Anna's Archive:**
 
