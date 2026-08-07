@@ -5,6 +5,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.0.0] — 2026-08-07
+
+### Changed
+
+- **Ports & adapters (hexagonal) rearchitecture.** The flat modules were replaced by a `librarian/` package where the core is entirely platform- and source-agnostic. Only `librarian/clients/telegram/adapter.py` (and `main.py`) know about Telegram. Entry point is now `python main.py`.
+  - **Sources** are pluggable behind a `Source` contract + registry (`librarian/sources/`): adding a download provider is one file plus one registry line, no core change.
+  - **Client platforms** talk to a generic `ClientContext` port; the entire conversation lives in `librarian/clients/flow.py`. Adding a messaging platform (Discord/WhatsApp) means implementing one adapter, no flow/core change.
+  - Preference keys are namespaced per platform (`telegram:123`).
+
+### Fixed
+
+- **EPUB→PDF actually produces a PDF.** `epub_to_pdf` used `Document.save()`, which raises on a non-PDF and silently fell back to EPUB; it now uses `convert_to_pdf()`.
+- **MOBI/AZW3** now require Calibre and raise a clear error instead of emitting an invalid PDF-under-a-`.mobi`-name.
+- **Cancel works during downloads.** `concurrent_updates(True)` is enabled, so the Annuler button (and other users) are no longer blocked by an in-flight download; a guard prevents concurrent downloads per user.
+- **No temp-file leak on cancellation** — partial files are cleaned up on `CancelledError` (a `BaseException`).
+- Global error handler; stuck email/Kindle prompt state is cleared; result dedup by full title keeps distinct series volumes; format menu only offers deliverable formats; stricter email validation.
+
+### Security
+
+- **SSRF guard resolves hostnames** and rejects any that map to internal IPs (closes the DNS-based bypass; IP literals were already blocked).
+
+### Tooling
+
+- Added a pytest suite (core, sources, search service, end-to-end flow, Telegram adapter, conversion, SSRF, cancel cleanup), a ruff config, and a GitHub Actions workflow running ruff + pytest.
+
+---
+
 ## [1.2.2] — 2026-03-09
 
 ### Fixed
