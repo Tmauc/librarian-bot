@@ -1,9 +1,7 @@
-"""Regression lock for temp-file cleanup on cancellation (#8).
+"""Regression lock for temp-file cleanup on cancellation (librarian.core.netfetch).
 
-asyncio.CancelledError is a BaseException, not an Exception. The streaming helpers
-used ``except Exception`` for cleanup, so a cancel mid-stream leaked the partial
-temp file. These tests drive a cancel through the real helper and assert both that
-cancellation propagates AND that no temp file is left behind.
+asyncio.CancelledError is a BaseException, not an Exception; the streaming helper
+must still remove the partial temp file when a download is cancelled mid-stream.
 """
 
 import asyncio
@@ -12,7 +10,7 @@ import tempfile
 
 import pytest
 
-import anna_archive
+from librarian.core import netfetch
 
 
 class _FakeResp:
@@ -40,22 +38,24 @@ def _librarian_temps():
 
 def test_cancel_midstream_propagates_and_cleans_up():
     before = _librarian_temps()
-    resp = _FakeResp(
-        {"content-length": "999999"},
-        chunks=[b"x" * 4096, b"y" * 4096, b"z" * 4096],
-        raise_after=1,  # cancel after the first chunk is written
-    )
+    resp = _FakeResp({"content-length": "999999"}, chunks=[b"x" * 4096, b"y" * 4096], raise_after=1)
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(anna_archive._stream_resp_to_file(resp, "epub"))
+        asyncio.run(netfetch.stream_to_tempfile(resp, "epub"))
     assert not (_librarian_temps() - before), "cancel mid-stream must not leak a temp file"
 
 
 def test_normal_stream_returns_path_and_file_exists():
     resp = _FakeResp({"content-length": "8192"}, chunks=[b"x" * 4096, b"y" * 4096])
-    path = asyncio.run(anna_archive._stream_resp_to_file(resp, "epub"))
+    path = asyncio.run(netfetch.stream_to_tempfile(resp, "epub"))
     try:
         assert path and os.path.exists(path)
         assert os.path.getsize(path) == 8192
     finally:
         if path and os.path.exists(path):
             os.remove(path)
+
+
+def test_too_large_raises():
+    resp = _FakeResp({"content-length": "999999"}, chunks=[b"x" * 4096] * 5)
+    with pytest.raises(RuntimeError, match="too large"):
+        asyncio.run(netfetch.stream_to_tempfile(resp, "epub", max_bytes=8192))

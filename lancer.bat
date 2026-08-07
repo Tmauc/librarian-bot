@@ -32,7 +32,7 @@ echo  Tout est pret. Demarrage du bot...
 echo  Ne ferme pas cette fenetre tant que tu veux utiliser le bot.
 echo.
 
-python bot.py
+python main.py
 
 echo.
 echo  Le bot s est arrete. Appuie sur une touche pour fermer.

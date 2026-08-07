@@ -8,7 +8,7 @@ import socket
 
 import pytest
 
-from utils import _is_safe_url, _ip_is_safe
+from librarian.core.security import _is_safe_url, _ip_is_safe
 
 
 @pytest.mark.parametrize(

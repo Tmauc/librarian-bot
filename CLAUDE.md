@@ -9,7 +9,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 pip install -r requirements.txt
 
 # Run locally
-python bot.py
+python main.py
+
+# Tests
+pip install -r requirements-dev.txt
+python -m pytest
 
 # Run via Docker
 docker compose up -d --build
@@ -20,26 +24,67 @@ The bot process is long-running. When working locally during development, kill t
 
 ## Architecture
 
-Single-process async bot (python-telegram-bot 21.x + httpx). No database — state lives in `context.user_data` per Telegram user session.
+Ports & adapters (hexagonal). The core knows nothing about any messaging platform
+or any download provider — it talks only to interfaces. Package layout:
 
-**Search flow:** `bot.py` fires `anna_archive.search()` and `prowlarr.search()` in parallel via `asyncio.gather`, merges results (epub-first, deduped by normalized title), stores them in `context.user_data["results"]`.
+```
+librarian/
+  config.py            # all env reading, once, into typed values
+  core/
+    models.py          # SearchResult (source-neutral; ref={} holds opaque source data)
+    search_service.py  # fan out to enabled sources, merge/order/dedup
+    download_service.py# dispatch a result back to the source that produced it
+    conversion.py delivery.py scanning.py prefs.py watcher.py netfetch.py security.py
+  sources/
+    base.py            # Source ABC: search() / download()
+    registry.py        # THE place to register a source (a list)
+    anna.py prowlarr.py
+  clients/
+    base.py            # ClientContext port + Session (resumable, future-based)
+    flow.py            # the ENTIRE conversation UX, platform-agnostic
+    telegram/adapter.py# the ONLY Telegram-specific code
+main.py                # wires enabled adapters to the core
+```
 
-**Download flow:** User clicks a button → `downloader.download_result(result, progress_callback)` dispatches to:
-- `anna_archive.download()` — scrapes the book's Anna's Archive page for mirror links, streams the first working one
-- `downloader._download_direct()` — streams a Prowlarr direct URL
-- `downloader._download_torrent()` — calls `prowlarr.grab()` then `watcher.wait_for_file()` polls the download folder
+### Two extension axes (the whole point)
+- **Add a download source**: create `librarian/sources/<name>.py` with a `Source`
+  subclass, add it to `registry._ALL`. No core/client change.
+- **Add a client platform** (Discord/WhatsApp): create an adapter under
+  `librarian/clients/` implementing `ClientContext` (`_send`/`_edit`/
+  `_send_document`/`max_file_size`) and routing incoming events into the
+  `Session` (`resolve_text`/`resolve_choice`/`cancel`); start it in `main.py`.
+  No core/flow change.
 
-**Progress UX:** An `asyncio.Task` (`_animate_preparing`) shows animated dots while mirrors are being resolved. It is cancelled as soon as `on_progress` is first called (i.e. streaming has started), which then switches to a `▰▰▱▱▱` progress bar updated every 2 seconds.
+### Conversation model
+`flow.py` is a set of linear coroutines (`run_start`, `run_settings`,
+`run_search`). It awaits `ctx.ask_choice()` / `ctx.ask_text()`, which park an
+`asyncio.Future` on the user's `Session`. The adapter resolves that future when a
+button/message arrives — this future bridge is the only per-platform plumbing.
+Cancellation = the adapter calls `session.cancel()`, cancelling the flow task; the
+download helper cleans partial temp files on `CancelledError` (a `BaseException`).
 
-**Auto-retry:** If a downloaded file exceeds `MAX_FILE_SIZE` (50 MB without local Bot API), the bot silently tries the next result in the list.
+### Search / download flow
+`search_service.search()` runs every enabled source's `search()` in parallel,
+orders (e-reader formats first, direct before torrents), drops oversized, dedups by
+full normalized title. A pick goes through `_deliver` in flow: `download_service.fetch()`
+(auto-retry across results, size guard) → convert (EPUB→PDF via PyMuPDF
+`convert_to_pdf`; MOBI/AZW3 require Calibre) → VirusTotal scan → deliver (this chat
+via `send_document`, or email/Kindle via `delivery`).
 
 ## Key constraints
 
-- **Telegram 50 MB upload limit** — enforced via `MAX_FILE_SIZE`. Raising it requires a local `telegram-bot-api` server (`LOCAL_API_SERVER` env var + `LOCAL_API_ID`/`LOCAL_API_HASH` from my.telegram.org). Set `LOCAL_API_SERVER=http://telegram-bot-api:8081` when running in Docker.
-- **Anna's Archive JSON API returns 404** — always falls back to HTML scraping of `annas-archive.gl/search`.
-- **Mirror resolution is slow** — libgen.is is blocked in France; `libgen.li/ads.php` returns an intermediate HTML page that must be scraped for the real `get.php?key=` URL.
-- **Whitelist** — every handler checks `ALLOWED_USER_IDS` from `.env`. Adding a user = append their numeric Telegram ID.
+- **Per-platform upload limits** live on the adapter (`ctx.max_file_size`).
+  Telegram is 50 MB (400 MB with a local Bot API server via `LOCAL_API_SERVER` +
+  `LOCAL_API_ID`/`LOCAL_API_HASH`). Discord ~25 MB, WhatsApp ~100 MB when added.
+- **Anna's Archive JSON API returns 404** — the source scrapes the HTML search page.
+- **Mirror resolution is slow** — libgen.is is blocked in France; `libgen.li/ads.php`
+  returns an intermediate HTML page scraped for the real `get.php?key=` URL.
+- **SSRF guard** (`core/security._is_safe_url`) resolves hostnames and rejects any
+  that map to internal IPs. Residual DNS-rebinding TOCTOU is documented in the code.
+- **Whitelist** is per-platform, owned by the adapter (`config.TELEGRAM_ALLOWED_IDS`).
+- **Prefs keys are namespaced strings** (`telegram:123`) so platforms don't collide.
 
 ## Environment variables
 
-See `.env.example`. Required: `TELEGRAM_TOKEN`, `ALLOWED_USER_IDS`. Optional but needed for torrents: `PROWLARR_URL`, `PROWLARR_API_KEY`, `BOOKS_DOWNLOAD_PATH`.
+See `.env.example`. Required: `TELEGRAM_TOKEN`, `ALLOWED_USER_IDS`. Optional but
+needed for torrents: `PROWLARR_URL`, `PROWLARR_API_KEY`, `BOOKS_DOWNLOAD_PATH`.

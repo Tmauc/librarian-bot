@@ -174,7 +174,7 @@ By default Telegram limits file uploads to 50 MB. If you need more, see the Dock
 pip install -r requirements.txt
 
 # Start the bot
-python bot.py
+python main.py
 ```
 
 The bot will start and print its active configuration, then log `Bot started.` when ready:
@@ -198,7 +198,7 @@ Open Telegram, find your bot by its username, and send `/start`.
 To keep it running in the background on Linux/macOS:
 
 ```bash
-nohup python bot.py &
+nohup python main.py &
 ```
 
 ---

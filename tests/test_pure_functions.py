@@ -1,13 +1,14 @@
-"""Regression locks for small pure helpers across the codebase."""
+"""Regression locks for small pure helpers across the new package."""
 
 import pytest
 
-import anna_archive
-import watcher
-import bot
+import main
+from librarian.clients import flow
+from librarian.core import watcher
+from librarian.sources import anna
 
 
-# --- bot._is_newer_version -------------------------------------------------
+# --- main._is_newer_version ------------------------------------------------
 @pytest.mark.parametrize(
     "remote,local,expected",
     [
@@ -16,44 +17,44 @@ import bot
         ("1.2.10", "1.2.2", True),   # numeric compare, not lexical
         ("1.2.2", "1.2.2", False),
         ("1.2.1", "1.2.2", False),
-        ("2.0.0-beta", "1.2.2", False),  # non-numeric tag → treated as (0,), never newer
+        ("2.0.0-beta", "1.2.2", False),
     ],
 )
 def test_is_newer_version(remote, local, expected):
-    assert bot._is_newer_version(remote, local) is expected
+    assert main._is_newer_version(remote, local) is expected
 
 
-# --- bot._fmt_size ---------------------------------------------------------
+# --- flow._fmt_size --------------------------------------------------------
 def test_fmt_size():
-    assert bot._fmt_size(0) == "?"
-    assert bot._fmt_size(512).endswith("Ko")
-    assert bot._fmt_size(5 * 1024 * 1024).endswith("Mo")
+    assert flow._fmt_size(0) == "?"
+    assert flow._fmt_size(512).endswith("Ko")
+    assert flow._fmt_size(5 * 1024 * 1024).endswith("Mo")
 
 
-# --- anna_archive parsing --------------------------------------------------
+# --- anna parsing ----------------------------------------------------------
 @pytest.mark.parametrize(
     "text,expected",
     [
         ("2.3 MB", int(2.3 * 1024 * 1024)),
         ("450 KB", 450 * 1024),
-        ("1,5 Mo", int(1.5 * 1024 * 1024)),  # French decimal comma + unit
+        ("1,5 Mo", int(1.5 * 1024 * 1024)),
         ("no size here", 0),
     ],
 )
 def test_parse_size_from_text(text, expected):
-    assert anna_archive._parse_size_from_text(text) == expected
+    assert anna._parse_size_from_text(text) == expected
 
 
 def test_validate_md5():
-    assert anna_archive._validate_md5("a" * 32)
-    assert not anna_archive._validate_md5("a" * 31)
-    assert not anna_archive._validate_md5("g" * 32)  # non-hex
+    assert anna._validate_md5("a" * 32)
+    assert not anna._validate_md5("a" * 31)
+    assert not anna._validate_md5("g" * 32)
 
 
 def test_sanitize_ext():
-    assert anna_archive._sanitize_ext("EPUB") == "epub"
-    assert anna_archive._sanitize_ext("") == "epub"
-    assert anna_archive._sanitize_ext("../../etc") == "etc"
+    assert anna._sanitize_ext("EPUB") == "epub"
+    assert anna._sanitize_ext("") == "epub"
+    assert anna._sanitize_ext("../../etc") == "etc"
 
 
 def test_extract_download_link_prefers_book_files():
@@ -61,22 +62,17 @@ def test_extract_download_link_prefers_book_files():
       <a href="/page.html">not a book</a>
       <a href="https://mirror.example/file.epub">download</a>
     """
-    assert (
-        anna_archive._extract_download_link(html, "https://mirror.example/")
-        == "https://mirror.example/file.epub"
-    )
+    assert anna._extract_download_link(html, "https://mirror.example/") == "https://mirror.example/file.epub"
 
 
 def test_extract_download_link_resolves_relative():
     html = '<a href="get.php?md5=abc">get</a>'
-    out = anna_archive._extract_download_link(html, "https://libgen.li/ads.php?x=1")
+    out = anna._extract_download_link(html, "https://libgen.li/ads.php?x=1")
     assert out == "https://libgen.li/get.php?md5=abc"
 
 
 # --- watcher matching ------------------------------------------------------
 def test_watcher_normalize_drops_short_words():
-    # Only words strictly longer than 3 chars survive ("the", "art", "of", "war"
-    # are all <= 3 and dropped); "warfare" stays.
     assert watcher._normalize("The Art of Warfare") == {"warfare"}
 
 
