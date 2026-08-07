@@ -10,6 +10,10 @@ a drop-in.
 - **How it fits together** → [Architecture](architecture.md)
 - **Every setting** → [Configuration reference](configuration.md)
 
+## Guides
+
+- [Kobo + Discord + Google Drive — step by step](guides/kobo-discord-gdrive.md)
+
 ## Clients (messaging front-ends)
 
 How users talk to the bot. Each is a thin adapter over the generic flow.
