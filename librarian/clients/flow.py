@@ -16,7 +16,9 @@ import time
 
 from librarian import config
 from librarian.clients.base import CANCEL, SKIP, Choice, ClientContext
-from librarian.core import conversion, delivery, download_service, prefs, scanning, search_service
+from librarian.core import conversion, download_service, prefs, scanning, search_service
+from librarian.destinations import registry as destinations
+from librarian.destinations.base import Destination
 
 logger = logging.getLogger(__name__)
 
@@ -168,17 +170,16 @@ async def run_search(ctx: ClientContext, query: str) -> None:
     else:
         desired_fmt = offer[0] if offer else "epub"
 
-    # Destination: this chat, or a configured email/Kindle address.
-    p = await prefs.get(ctx.user_key)
-    dest_choices = [Choice("📬 Ici (ce chat)", "here")]
-    if p.get("email"):
-        dest_choices.append(Choice("📧 Email", "email"))
-    if p.get("kindle_email"):
-        dest_choices.append(Choice("📖 Kindle", "kindle"))
-    if len(dest_choices) > 1:
-        destination = await ctx.ask_choice(f"📚 « {result.title[:50]} »\n\n📬 Où envoyer ?", dest_choices)
+    # Destination: pick among those available to this user (pluggable registry seam).
+    available = await destinations.available_for(ctx)
+    if len(available) > 1:
+        chosen = await ctx.ask_choice(
+            f"📚 « {result.title[:50]} »\n\n📬 Où envoyer ?",
+            [Choice(d.label, d.name) for d in available],
+        )
+        destination = destinations.get(chosen)
     else:
-        destination = "here"
+        destination = available[0]  # "here" is always available
 
     await _deliver(ctx, results, idx, desired_fmt, destination)
 
@@ -225,7 +226,7 @@ async def _ask_optional_email(ctx: ClientContext, prompt: str) -> str | None:
         await ctx.say("❌ Adresse invalide. Réessaie, ou clique Passer.")
 
 
-async def _deliver(ctx: ClientContext, results, start_idx: int, desired_fmt: str, destination: str) -> None:
+async def _deliver(ctx: ClientContext, results, start_idx: int, desired_fmt: str, destination: Destination) -> None:
     file_path = None
     converted_path = None
     try:
@@ -268,24 +269,7 @@ async def _deliver(ctx: ClientContext, results, start_idx: int, desired_fmt: str
         safe_title = re.sub(r"[^\w\s\-]", "", title).strip()[:60] or "livre"
         filename = f"{safe_title}.{send_ext}"
 
-        if destination == "here":
-            await ctx.say(f"📤 Envoi de « {title} »…")
-            await ctx.send_document(send_path, filename, f"📖 {title}{vt_caption}")
-            await ctx.say("✅ Envoyé ! Bonne lecture 📖")
-        elif destination in ("email", "kindle"):
-            key = "email" if destination == "email" else "kindle_email"
-            addr = (await prefs.get(ctx.user_key)).get(key)
-            if not addr:
-                await ctx.say(f"❌ Adresse {destination} non configurée. Utilise /settings")
-                return
-            label = "Kindle" if destination == "kindle" else "email"
-            try:
-                await ctx.say(f"📧 Envoi par {label} à {addr}…")
-                await delivery.send_file(send_path, filename, addr, kindle=(destination == "kindle"))
-                await ctx.say(f"✅ Envoyé à {addr} ✅")
-            except Exception as e:
-                logger.warning(f"{destination} send failed: {e}")
-                await ctx.say(f"❌ Envoi {label} échoué. Vérifie l'adresse et la config SMTP dans /settings.")
+        await destination.deliver(ctx, send_path, filename, title, vt_caption)
     finally:
         for p in (file_path, converted_path):
             if p and p.startswith(tempfile.gettempdir()):

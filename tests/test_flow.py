@@ -131,6 +131,31 @@ def test_no_results_message():
     assert any("Aucun résultat" in m for m in ctx.messages)
 
 
+def test_search_offers_and_uses_email_destination(monkeypatch):
+    from librarian.core import delivery
+
+    sent = {}
+
+    async def fake_send(path, filename, addr, kindle=False):
+        sent.update(addr=addr, kindle=kindle)
+
+    async def scenario():
+        registry._ALL[:] = [StubSource(_epub_results())]
+        monkeypatch.setattr(delivery, "is_configured", lambda: True)
+        monkeypatch.setattr(delivery, "send_file", fake_send)
+        await prefs.set("test:1", "format", "epub")
+        await prefs.set("test:1", "email", "me@example.com")
+        s = Session("test:1")
+        ctx = FakeContext(s)
+        # pick result 0 → format epub → destination menu (here/email) → choose email
+        await drive(s, flow.run_search(ctx, "dune"), [("choice", "0"), ("choice", "epub"), ("choice", "email")])
+        return ctx
+
+    ctx = asyncio.run(scenario())
+    assert sent == {"addr": "me@example.com", "kindle": False}
+    assert not ctx.docs, "email destination must not upload to the chat"
+
+
 def test_settings_changes_format():
     async def scenario():
         await prefs.set("test:1", "format", "epub")
