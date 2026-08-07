@@ -16,7 +16,7 @@ import time
 
 from librarian import config
 from librarian.clients.base import CANCEL, SKIP, Card, Choice, ClientContext
-from librarian.core import conversion, download_service, prefs, scanning, search_service
+from librarian.core import conversion, download_service, planner, prefs, scanning, search_service
 from librarian.destinations import registry as destinations
 from librarian.destinations.base import Destination
 
@@ -128,6 +128,13 @@ async def run_search(ctx: ClientContext, query: str) -> None:
         await ctx.say(f"❌ Requête trop longue (max {config.MAX_QUERY_LENGTH} caractères).")
         return
 
+    # Smart multi-book intent (« l'intégrale de X ») → LLM plan → batch, when enabled.
+    if planner.enabled() and _looks_like_batch(query):
+        p = await planner.plan(query)
+        if p and p.series:
+            await _run_batch(ctx, p)
+            return
+
     await ctx.say("🔍 Recherche en cours…")
     results = await search_service.search(query, ctx.max_file_size)
     if not results:
@@ -160,18 +167,69 @@ async def run_search(ctx: ClientContext, query: str) -> None:
     else:
         desired_fmt = offer[0] if offer else "epub"
 
-    # Destination: pick among those available to this user (pluggable registry seam).
+    destination = await _pick_destination(ctx)
+    await _deliver(ctx, results, idx, desired_fmt, destination)
+
+
+async def _pick_destination(ctx: ClientContext):
+    """Ask where to send the file, or auto-pick when only one destination is available."""
     available = await destinations.available_for(ctx)
     if len(available) > 1:
         chosen = await ctx.ask_choice(
-            f"📚 « {result.title[:50]} »\n\n📬 Où envoyer ?",
-            [Choice(d.label, d.name) for d in available],
+            "📬 Où envoyer ?", [Choice(d.label, d.name) for d in available]
         )
-        destination = destinations.get(chosen)
-    else:
-        destination = available[0]  # "here" is always available
+        return destinations.get(chosen)
+    return available[0]  # "here" is always available
 
-    await _deliver(ctx, results, idx, desired_fmt, destination)
+
+# ===========================================================================
+# Smart multi-book (batch)
+# ===========================================================================
+_BATCH_HINTS = (
+    "intégrale", "integrale", "tous les tomes", "toute la série", "toute la serie",
+    "série complète", "serie complete", "collection complète", "collection complete",
+    "saga", "trilogie", "les tomes", "tomes 1", "premiers tomes", "l'ensemble des",
+    "complete series", "all volumes", "whole series",
+)
+
+
+def _looks_like_batch(query: str) -> bool:
+    ql = query.lower()
+    return any(h in ql for h in _BATCH_HINTS)
+
+
+def _auto_pick(results):
+    """Best result for an unattended pick — results are already epub-first sorted."""
+    return results[0] if results else None
+
+
+async def _run_batch(ctx: ClientContext, plan) -> None:
+    """Search + auto-pick + download every volume in the plan, to one destination."""
+    lines = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(plan.queries))
+    card = Card(
+        title=f"🧠 {plan.title or 'Plusieurs livres'}",
+        description=f"Je vais chercher et télécharger :\n\n{lines}",
+        footer="Lancer le téléchargement groupé ?",
+    )
+    if await ctx.ask_choice(card, [Choice("✅ Lancer", "go"), Choice("❌ Annuler", "no")]) != "go":
+        await ctx.say("🔍 Annulé.")
+        return
+
+    destination = await _pick_destination(ctx)
+    desired_fmt = plan.desired_format if plan.desired_format in config.ALLOWED_FORMATS else config.ALLOWED_FORMATS[0]
+
+    done = 0
+    for i, q in enumerate(plan.queries, 1):
+        await ctx.say(f"📖 [{i}/{len(plan.queries)}] Recherche : {q}")
+        results = await search_service.search(q, ctx.max_file_size)
+        picked = _auto_pick(results)
+        if picked is None:
+            await ctx.say(f"❌ Introuvable : {q}")
+            continue
+        await _deliver(ctx, [picked], 0, desired_fmt, destination)
+        done += 1
+
+    await ctx.say(f"✅ Terminé — {done}/{len(plan.queries)} livre(s) livré(s).")
 
 
 # ===========================================================================
