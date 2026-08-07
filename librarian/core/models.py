@@ -34,3 +34,19 @@ class SearchResult:
     cover: str = ""        # cover image URL
     description: str = ""
     ref: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Plan:
+    """A search plan produced by the intelligence layer from a free-text request.
+
+    ``queries`` is one search per wanted book (several for a series/intégrale, one
+    otherwise). ``language``/``desired_format`` are optional hints; ``title`` is a
+    human label for the batch; ``series`` marks a multi-volume intent.
+    """
+
+    queries: list[str]
+    language: str = ""
+    desired_format: str = ""
+    title: str = ""
+    series: bool = False

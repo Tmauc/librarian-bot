@@ -37,6 +37,12 @@ ALLOWED_FORMATS: list[str] = [
     if f in _VALID_FORMATS
 ] or ["epub"]
 
+# --- Intelligence (optional local LLM, e.g. Ollama) ------------------------
+# LLM_MODEL empty = disabled (the bot does a plain single search). A small local
+# model works; ~3B (qwen2.5:3b / llama3.2:3b) is recommended for series enumeration.
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://localhost:11434").rstrip("/")
+LLM_MODEL = os.environ.get("LLM_MODEL", "")
+
 # --- Sources ---------------------------------------------------------------
 ANNA_ARCHIVE_URL = os.environ.get("ANNA_ARCHIVE_URL", "").rstrip("/")
 PROWLARR_URL = os.environ.get("PROWLARR_URL", "").rstrip("/")
