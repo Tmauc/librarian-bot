@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -123,10 +124,8 @@ class ClientContext(abc.ABC):
 
     async def update_status(self, text: str, choices: list[Choice] | None = None) -> None:
         """Like say() but never raises (progress updates are best-effort)."""
-        try:
+        with contextlib.suppress(Exception):
             await self.say(text, choices)
-        except Exception:
-            pass
 
     async def ask_choice(self, prompt: str, choices: list[Choice], cancellable: bool = True) -> str:
         opts = list(choices)

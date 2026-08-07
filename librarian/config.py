@@ -4,6 +4,7 @@ Everything that reads ``os.environ`` for configuration lives here so sources and
 clients depend on typed values, not on env-var names scattered across modules.
 """
 
+import contextlib
 import os
 
 from dotenv import load_dotenv
@@ -19,10 +20,8 @@ def _int_set(raw: str) -> set[int]:
         part = part.strip()
         if not part:
             continue
-        try:
+        with contextlib.suppress(ValueError):
             out.add(int(part))
-        except ValueError:
-            pass
     return out
 
 

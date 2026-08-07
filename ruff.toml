@@ -1,0 +1,11 @@
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+# E501: long descriptive French prompts/log lines are intentional.
+ignore = ["E501"]
+
+[lint.per-file-ignores]
+# Test doubles use loose loop-variable closures and multi-with by design.
+"tests/*" = ["B", "SIM"]

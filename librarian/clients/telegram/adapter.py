@@ -12,6 +12,7 @@ Everything about *what* the conversation does lives in ``librarian.clients.flow`
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -136,9 +137,7 @@ class TelegramClient:
         value = query.data or ""
         if value == CANCEL:
             s.cancel()
-            try:
+            with contextlib.suppress(Exception):
                 await query.edit_message_text("⛔ Annulé.")
-            except Exception:
-                pass
             return
         s.resolve_choice(value)

@@ -108,16 +108,15 @@ class ProwlarrSource(Source):
         async with httpx.AsyncClient(
             headers=BROWSER_HEADERS, timeout=60, follow_redirects=True,
             event_hooks={"response": [_check_redirect]},
-        ) as client:
-            async with client.stream("GET", url) as resp:
-                resp.raise_for_status()
-                ctype = resp.headers.get("content-type", "").split(";")[0].strip()
-                if ctype and ctype not in VALID_CONTENT_TYPES:
-                    raise RuntimeError(f"Unexpected content-type: {ctype!r}")
-                path = await stream_to_tempfile(resp, ext, on_progress, max_bytes)
-                if not path:
-                    raise RuntimeError("Empty download")
-                return path
+        ) as client, client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            ctype = resp.headers.get("content-type", "").split(";")[0].strip()
+            if ctype and ctype not in VALID_CONTENT_TYPES:
+                raise RuntimeError(f"Unexpected content-type: {ctype!r}")
+            path = await stream_to_tempfile(resp, ext, on_progress, max_bytes)
+            if not path:
+                raise RuntimeError("Empty download")
+            return path
 
     async def _download_torrent(self, result) -> str:
         await self._grab(result.ref.get("indexer_id", 0), result.ref.get("guid", ""))

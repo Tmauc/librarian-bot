@@ -1,6 +1,7 @@
 """EPUB→PDF/MOBI/AZW3 conversion (moved from converter.py)."""
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -42,10 +43,8 @@ def _convert_sync(epub_path: str) -> str:
             raise RuntimeError("PyMuPDF produced an empty or missing PDF")
         return pdf_path
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             os.remove(pdf_path)
-        except Exception:
-            pass
         raise
 
 
@@ -79,10 +78,8 @@ def _convert_to_format_sync(epub_path: str, fmt: str) -> str:
             raise RuntimeError(f"Conversion produced an empty or missing {fmt.upper()} file")
         return output_path
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             os.remove(output_path)
-        except Exception:
-            pass
         raise
 
 

@@ -7,6 +7,7 @@ platform never touches this file; adding a download source never touches it eith
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -15,7 +16,7 @@ import time
 
 from librarian import config
 from librarian.clients.base import CANCEL, SKIP, Choice, ClientContext
-from librarian.core import conversion, delivery, prefs, scanning, search_service, download_service
+from librarian.core import conversion, delivery, download_service, prefs, scanning, search_service
 
 logger = logging.getLogger(__name__)
 
@@ -288,10 +289,8 @@ async def _deliver(ctx: ClientContext, results, start_idx: int, desired_fmt: str
     finally:
         for p in (file_path, converted_path):
             if p and p.startswith(tempfile.gettempdir()):
-                try:
+                with contextlib.suppress(Exception):
                     os.remove(p)
-                except Exception:
-                    pass
 
 
 async def _fetch_with_retry(ctx: ClientContext, results, start_idx: int, desired_fmt: str):
@@ -302,9 +301,7 @@ async def _fetch_with_retry(ctx: ClientContext, results, start_idx: int, desired
     any_mirror_failure = False
     for i in range(start_idx, len(results)):
         result = results[i]
-        t = result.title or "livre"
         ext = result.ext or "epub"
-        is_torrent = result.is_torrent
 
         # Only an EPUB converts to MOBI/AZW3; PDF target accepts EPUB or PDF.
         if desired_fmt in ("mobi", "azw3") and ext != "epub":
@@ -313,69 +310,70 @@ async def _fetch_with_retry(ctx: ClientContext, results, start_idx: int, desired
             continue
 
         if i > start_idx:
-            await ctx.update_status(f"🔄 Essai du résultat suivant : « {t} »…", _cancel_btn())
-
-        prep = asyncio.Event()
-
-        async def on_progress(d: int, total: int, _t=t) -> None:
-            prep.set()
-            if total:
-                pct = min(int(d / total * 100), 99)
-                await ctx.update_status(
-                    f"⬇️ « {_t} »\n{_progress_bar(pct)} {pct}%  ({_fmt_size(d)} / {_fmt_size(total)})",
-                    _cancel_btn(),
-                )
-            else:
-                await ctx.update_status(f"⬇️ « {_t} »\n{_fmt_size(d)} téléchargés…", _cancel_btn())
-
-        async def animate() -> None:
-            frames = ["⏳ Recherche du fichier .", "⏳ Recherche du fichier ..", "⏳ Recherche du fichier ..."]
-            k = 0
-            while not prep.is_set():
-                await ctx.update_status(frames[k % 3], _cancel_btn())
-                k += 1
-                await asyncio.sleep(1)
-
-        if is_torrent:
-            await ctx.update_status(
-                f"🌀 Envoi vers le client torrent pour « {t} »…\n⏳ Surveillance du dossier…", _cancel_btn()
-            )
-            anim_task = None
-        else:
-            await ctx.update_status("⏳ Préparation…", _cancel_btn())
-            anim_task = asyncio.create_task(animate())
+            await ctx.update_status(f"🔄 Essai du résultat suivant : « {result.title or 'livre'} »…", _cancel_btn())
 
         try:
-            path = await download_service.fetch(
-                result, on_progress=None if is_torrent else on_progress, max_bytes=ctx.max_file_size
-            )
-        except asyncio.CancelledError:
-            if anim_task:
-                anim_task.cancel()
-            raise
+            path = await _download_one(ctx, result)
         except TimeoutError:
             logger.warning(f"Timeout on result {i}, skipping")
             any_mirror_failure = True
             continue
-        except Exception as e:
+        except Exception as e:  # CancelledError is a BaseException — it propagates
             logger.warning(f"Result {i} failed ({e}), skipping")
             any_mirror_failure = True
             continue
-        finally:
-            if anim_task:
-                anim_task.cancel()
 
         if os.path.getsize(path) > ctx.max_file_size:
             logger.info(f"Result {i} too large, skipping")
-            try:
+            with contextlib.suppress(Exception):
                 os.remove(path)
-            except Exception:
-                pass
             continue
 
         return path, result
 
     return "mirrors" if any_mirror_failure else None
+
+
+async def _download_one(ctx: ClientContext, result) -> str:
+    """Download a single result, driving the preparing/progress UI. Raises on failure."""
+    t = result.title or "livre"
+    is_torrent = result.is_torrent
+    prep = asyncio.Event()
+
+    async def on_progress(d: int, total: int) -> None:
+        prep.set()
+        if total:
+            pct = min(int(d / total * 100), 99)
+            await ctx.update_status(
+                f"⬇️ « {t} »\n{_progress_bar(pct)} {pct}%  ({_fmt_size(d)} / {_fmt_size(total)})", _cancel_btn()
+            )
+        else:
+            await ctx.update_status(f"⬇️ « {t} »\n{_fmt_size(d)} téléchargés…", _cancel_btn())
+
+    async def animate() -> None:
+        frames = ["⏳ Recherche du fichier .", "⏳ Recherche du fichier ..", "⏳ Recherche du fichier ..."]
+        k = 0
+        while not prep.is_set():
+            await ctx.update_status(frames[k % 3], _cancel_btn())
+            k += 1
+            await asyncio.sleep(1)
+
+    if is_torrent:
+        await ctx.update_status(
+            f"🌀 Envoi vers le client torrent pour « {t} »…\n⏳ Surveillance du dossier…", _cancel_btn()
+        )
+        anim_task = None
+    else:
+        await ctx.update_status("⏳ Préparation…", _cancel_btn())
+        anim_task = asyncio.create_task(animate())
+
+    try:
+        return await download_service.fetch(
+            result, on_progress=None if is_torrent else on_progress, max_bytes=ctx.max_file_size
+        )
+    finally:
+        if anim_task:
+            anim_task.cancel()
 
 
 async def _scan(ctx: ClientContext, path: str, title: str) -> str | None:

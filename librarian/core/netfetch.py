@@ -1,5 +1,6 @@
 """Reusable HTTP-streaming-to-tempfile helper, shared by sources."""
 
+import contextlib
 import logging
 import os
 import tempfile
@@ -56,18 +57,14 @@ async def stream_to_tempfile(
                     if now - last_report >= 2.0 and pct != last_pct:
                         last_report = now
                         last_pct = pct
-                        try:
+                        with contextlib.suppress(Exception):
                             await on_progress(downloaded, total)
-                        except Exception:
-                            pass
         if downloaded < 1024:
             os.remove(path)
             return None
         return path
     except BaseException:
         if path:
-            try:
+            with contextlib.suppress(Exception):
                 os.remove(path)
-            except Exception:
-                pass
         raise

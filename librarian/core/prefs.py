@@ -5,6 +5,7 @@ without colliding, e.g. ``"telegram:123"`` vs ``"discord:456"``.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import tempfile
@@ -24,7 +25,7 @@ async def get(user_key: str) -> dict:
         if not os.path.exists(PREFS_FILE):
             return {}
         try:
-            with open(PREFS_FILE, "r", encoding="utf-8") as f:
+            with open(PREFS_FILE, encoding="utf-8") as f:
                 data = json.load(f)
                 return data.get(str(user_key), {})
         except Exception:
@@ -42,7 +43,7 @@ async def set(user_key: str, key: str, value: Any) -> None:
         data = {}
         if os.path.exists(PREFS_FILE):
             try:
-                with open(PREFS_FILE, "r", encoding="utf-8") as f:
+                with open(PREFS_FILE, encoding="utf-8") as f:
                     data = json.load(f)
             except Exception:
                 pass
@@ -61,7 +62,7 @@ async def delete_user(user_key: str) -> None:
         if not os.path.exists(PREFS_FILE):
             return
         try:
-            with open(PREFS_FILE, "r", encoding="utf-8") as f:
+            with open(PREFS_FILE, encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
             return
@@ -82,8 +83,6 @@ def _atomic_write(data: dict) -> None:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(temp_path, PREFS_FILE)
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             os.unlink(temp_path)
-        except Exception:
-            pass
         raise
