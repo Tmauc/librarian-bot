@@ -15,7 +15,7 @@ import tempfile
 import time
 
 from librarian import config
-from librarian.clients.base import CANCEL, SKIP, Choice, ClientContext
+from librarian.clients.base import CANCEL, SKIP, Card, Choice, ClientContext
 from librarian.core import conversion, download_service, prefs, scanning, search_service
 from librarian.destinations import registry as destinations
 from librarian.destinations.base import Destination
@@ -146,17 +146,7 @@ async def run_search(ctx: ClientContext, query: str) -> None:
             await ctx.say("🔍 Recherche annulée. Envoie un nouveau titre quand tu veux !")
             return
 
-    choices = []
-    for i, r in enumerate(results):
-        if r.ext != "epub" and has_epub:
-            continue  # hide non-epub when epub exists (indices preserved)
-        icon = "📥" if not r.is_torrent else "🌀"
-        title = r.title or "?"
-        short = title[:45] + "…" if len(title) > 45 else title
-        choices.append(Choice(f"{icon} {short}", str(i)))
-
-    pick = await ctx.ask_choice(f"📚 {len(choices)} résultat(s) :", choices)
-    idx = int(pick)
+    idx = await _choose_result(ctx, results, query, has_epub)
     result = results[idx]
 
     # Format: only EPUB sources can be converted; others are delivered as-is.
@@ -182,6 +172,68 @@ async def run_search(ctx: ClientContext, query: str) -> None:
         destination = available[0]  # "here" is always available
 
     await _deliver(ctx, results, idx, desired_fmt, destination)
+
+
+# ===========================================================================
+# Result list + detail card
+# ===========================================================================
+async def _choose_result(ctx: ClientContext, results, query: str, has_epub: bool) -> int:
+    """Show the enriched list; open a detail card on selection; return the chosen
+    index once the user hits Télécharger (loops back to the list on Retour)."""
+    shown = [i for i, r in enumerate(results) if not (r.ext != "epub" and has_epub)]
+    while True:
+        pick = await ctx.ask_choice(
+            _results_card(query, results, shown), [_result_choice(i, results[i]) for i in shown]
+        )
+        idx = int(pick)
+        action = await ctx.ask_choice(
+            await _detail_card(results[idx]),
+            [Choice("⬇️ Télécharger", "dl"), Choice("⬅️ Retour à la liste", "back")],
+        )
+        if action == "dl":
+            return idx
+
+
+def _meta_line(r) -> str:
+    bits = [r.author, r.year, r.language, (_fmt_size(r.size_bytes) if r.size_bytes else ""), (r.ext or "").upper()]
+    return " · ".join(b for b in bits if b)
+
+
+def _result_choice(i: int, r) -> Choice:
+    return Choice(label=f"{i + 1}. {(r.title or '?')[:80]}", value=str(i), description=_meta_line(r)[:100])
+
+
+def _results_card(query: str, results, shown: list[int]) -> Card:
+    lines = []
+    for n, i in enumerate(shown, 1):
+        r = results[i]
+        icon = "📥" if not r.is_torrent else "🌀"
+        lines.append(f"{n}. {icon} {r.title}\n     {_meta_line(r)}")
+    return Card(
+        title=f"📚 {len(shown)} résultat(s) pour « {query[:60]} »",
+        description="\n\n".join(lines)[:3900],
+        footer="Choisis un livre pour voir sa fiche",
+    )
+
+
+async def _detail_card(r) -> Card:
+    extra = await download_service.details(r)
+    description = extra.get("description") or r.description or "(pas de description disponible)"
+    cover = extra.get("cover") or r.cover or None
+    fields = []
+    if r.author:
+        fields.append(("Auteur", r.author))
+    if r.year:
+        fields.append(("Année", r.year))
+    if r.language:
+        fields.append(("Langue", r.language))
+    fields.append(("Format", (r.ext or "?").upper()))
+    if r.size_bytes:
+        fields.append(("Taille", _fmt_size(r.size_bytes)))
+    return Card(
+        title=(r.title or "?")[:250], description=description[:1000],
+        fields=fields, thumbnail=cover, footer="⬇️ Télécharger  ·  ⬅️ Retour",
+    )
 
 
 # ===========================================================================
