@@ -26,7 +26,7 @@ def _int_set(raw: str) -> set[int]:
 
 
 # --- Shared / product-wide -------------------------------------------------
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "owner/librarian-bot")
 MAX_RESULTS = 10
 MAX_QUERY_LENGTH = 200
@@ -43,6 +43,18 @@ PROWLARR_URL = os.environ.get("PROWLARR_URL", "").rstrip("/")
 PROWLARR_API_KEY = os.environ.get("PROWLARR_API_KEY", "")
 BOOKS_DOWNLOAD_PATH = os.environ.get("BOOKS_DOWNLOAD_PATH", "/downloads/books")
 DOWNLOAD_TIMEOUT_MINUTES = int(os.environ.get("DOWNLOAD_TIMEOUT_MINUTES", "15"))
+
+# --- Cloud destinations (optional; single-account, e.g. to feed a Kobo) ----
+# Dropbox: one app (key/secret) + a long-lived refresh token + a target folder.
+DROPBOX_APP_KEY = os.environ.get("DROPBOX_APP_KEY", "")
+DROPBOX_APP_SECRET = os.environ.get("DROPBOX_APP_SECRET", "")
+DROPBOX_REFRESH_TOKEN = os.environ.get("DROPBOX_REFRESH_TOKEN", "")
+DROPBOX_FOLDER = os.environ.get("DROPBOX_FOLDER", "/librarian-bot")
+# Google Drive: OAuth client (id/secret) + refresh token + destination folder id.
+GDRIVE_CLIENT_ID = os.environ.get("GDRIVE_CLIENT_ID", "")
+GDRIVE_CLIENT_SECRET = os.environ.get("GDRIVE_CLIENT_SECRET", "")
+GDRIVE_REFRESH_TOKEN = os.environ.get("GDRIVE_REFRESH_TOKEN", "")
+GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "")
 
 # --- Telegram client (platform-specific glue only) -------------------------
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")

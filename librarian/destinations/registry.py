@@ -10,18 +10,23 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from librarian.destinations.base import Destination
+from librarian.destinations.dropbox import DropboxDestination
 from librarian.destinations.email import EmailDestination
+from librarian.destinations.gdrive import GoogleDriveDestination
 from librarian.destinations.here import ThisChatDestination
 from librarian.destinations.kindle import KindleDestination
 
 if TYPE_CHECKING:
     from librarian.clients.base import ClientContext
 
-# Order = order shown in the menu. "here" first (always available).
+# Order = order shown in the menu. "here" first (always available); the cloud
+# destinations only appear when their credentials are configured.
 _ALL: list[Destination] = [
     ThisChatDestination(),
     EmailDestination(),
     KindleDestination(),
+    DropboxDestination(),
+    GoogleDriveDestination(),
 ]
 
 

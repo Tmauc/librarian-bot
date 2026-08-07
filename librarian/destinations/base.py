@@ -62,3 +62,27 @@ class MailDestination(Destination):
         except Exception as e:
             logger.warning(f"{self.name} send failed: {e}")
             await ctx.say(f"❌ Envoi {self.channel} échoué. Vérifie l'adresse et la config SMTP dans /settings.")
+
+
+class CloudUploadDestination(Destination):
+    """Reusable base for 'upload the file to a cloud folder' destinations.
+
+    Subclasses implement ``available`` (credentials present) and ``_upload`` (the
+    provider-specific token refresh + upload). This base owns the status messages and
+    error handling. A cloud folder feeds e-readers that sync it (e.g. a Kobo pointed
+    at the same Dropbox / Google Drive)."""
+
+    where: str = "le cloud"  # human label used in status messages
+
+    async def deliver(self, ctx: ClientContext, path: str, filename: str, title: str, caption: str) -> None:
+        try:
+            await ctx.say(f"☁️ Envoi vers {self.where}…")
+            await self._upload(path, filename)
+            await ctx.say(f"✅ Déposé sur {self.where} — synchronise ta liseuse 📖")
+        except Exception as e:
+            logger.warning(f"{self.name} upload failed: {e}")
+            await ctx.say(f"❌ Envoi vers {self.where} échoué. Vérifie la configuration.")
+
+    @abc.abstractmethod
+    async def _upload(self, path: str, filename: str) -> None:
+        """Upload the file to the provider. Raise on failure."""

@@ -1,7 +1,9 @@
 """Locks for the destination seam — pluggable delivery targets."""
 
 import asyncio
+import json
 
+from librarian import config
 from librarian.core import delivery, prefs
 from librarian.destinations import registry
 from librarian.destinations.base import Destination
@@ -29,7 +31,7 @@ def _fake_prefs(data):
 
 
 def test_registry_defaults():
-    assert [d.name for d in registry.all_destinations()] == ["here", "email", "kindle"]
+    assert [d.name for d in registry.all_destinations()] == ["here", "email", "kindle", "dropbox", "gdrive"]
     assert registry.get("email").name == "email"
     assert registry.get("nope") is None
 
@@ -95,3 +97,116 @@ def test_adding_a_destination_needs_no_core_change():
         assert "folder" in [d.name for d in registry.all_destinations()]
     finally:
         registry._ALL[:] = saved
+
+
+# --- cloud destinations (Dropbox / Google Drive) ---------------------------
+class _FakeResp:
+    def __init__(self, data=None):
+        self._data = data or {}
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._data
+
+
+class _FakeHTTP:
+    def __init__(self, responder, calls):
+        self._responder = responder
+        self._calls = calls
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, **kw):
+        self._calls.append({"m": "POST", "url": url, **kw})
+        return _FakeResp(self._responder(url))
+
+    async def patch(self, url, **kw):
+        self._calls.append({"m": "PATCH", "url": url, **kw})
+        return _FakeResp(self._responder(url))
+
+
+def _fake_httpx(monkeypatch, module, mapping):
+    calls = []
+
+    def responder(url):
+        for key, val in mapping.items():
+            if key in url:
+                return val
+        return {}
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda *a, **k: _FakeHTTP(responder, calls))
+    return calls
+
+
+def test_dropbox_available_requires_credentials(monkeypatch):
+    from librarian.destinations.dropbox import DropboxDestination
+
+    d = DropboxDestination()
+    monkeypatch.setattr(config, "DROPBOX_REFRESH_TOKEN", "")
+    assert asyncio.run(d.available(FakeCtx())) is False
+    monkeypatch.setattr(config, "DROPBOX_REFRESH_TOKEN", "rt")
+    monkeypatch.setattr(config, "DROPBOX_APP_KEY", "k")
+    monkeypatch.setattr(config, "DROPBOX_APP_SECRET", "s")
+    assert asyncio.run(d.available(FakeCtx())) is True
+
+
+def test_dropbox_upload_puts_file_in_folder(monkeypatch, tmp_path):
+    from librarian.destinations import dropbox as dbx
+
+    monkeypatch.setattr(config, "DROPBOX_REFRESH_TOKEN", "rt")
+    monkeypatch.setattr(config, "DROPBOX_APP_KEY", "k")
+    monkeypatch.setattr(config, "DROPBOX_APP_SECRET", "s")
+    monkeypatch.setattr(config, "DROPBOX_FOLDER", "/Kobo")
+    f = tmp_path / "Book.epub"
+    f.write_bytes(b"hello")
+    calls = _fake_httpx(monkeypatch, dbx, {"/token": {"access_token": "AT"}})
+
+    ctx = FakeCtx()
+    asyncio.run(dbx.DropboxDestination().deliver(ctx, str(f), "Book.epub", "Book", ""))
+
+    upload = next(c for c in calls if c["url"].endswith("/files/upload"))
+    assert upload["headers"]["Authorization"] == "Bearer AT"
+    assert json.loads(upload["headers"]["Dropbox-API-Arg"])["path"] == "/Kobo/Book.epub"
+    assert upload["content"] == b"hello"
+    assert "Déposé" in ctx.said[-1]
+
+
+def test_gdrive_available_requires_credentials(monkeypatch):
+    from librarian.destinations.gdrive import GoogleDriveDestination
+
+    d = GoogleDriveDestination()
+    monkeypatch.setattr(config, "GDRIVE_REFRESH_TOKEN", "")
+    assert asyncio.run(d.available(FakeCtx())) is False
+    monkeypatch.setattr(config, "GDRIVE_REFRESH_TOKEN", "rt")
+    monkeypatch.setattr(config, "GDRIVE_CLIENT_ID", "id")
+    monkeypatch.setattr(config, "GDRIVE_CLIENT_SECRET", "sec")
+    assert asyncio.run(d.available(FakeCtx())) is True
+
+
+def test_gdrive_uploads_then_names_and_moves(monkeypatch, tmp_path):
+    from librarian.destinations import gdrive as gd
+
+    monkeypatch.setattr(config, "GDRIVE_REFRESH_TOKEN", "rt")
+    monkeypatch.setattr(config, "GDRIVE_CLIENT_ID", "id")
+    monkeypatch.setattr(config, "GDRIVE_CLIENT_SECRET", "sec")
+    monkeypatch.setattr(config, "GDRIVE_FOLDER_ID", "FOLDER")
+    f = tmp_path / "Book.epub"
+    f.write_bytes(b"hi")
+    calls = _fake_httpx(monkeypatch, gd, {"/token": {"access_token": "AT"}, "/upload/drive": {"id": "FID"}})
+
+    ctx = FakeCtx()
+    asyncio.run(gd.GoogleDriveDestination().deliver(ctx, str(f), "Book.epub", "Book", ""))
+
+    upload = next(c for c in calls if "/upload/drive" in c["url"])
+    assert upload["content"] == b"hi"
+    patch = next(c for c in calls if c["m"] == "PATCH")
+    assert patch["url"].endswith("/files/FID")
+    assert patch["json"] == {"name": "Book.epub"}
+    assert patch["params"]["addParents"] == "FOLDER"
+    assert "Déposé" in ctx.said[-1]
