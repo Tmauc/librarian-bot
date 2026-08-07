@@ -1,6 +1,6 @@
 # 📚 librarian-bot — Guide d'installation
 
-> **Avertissement :** Ce projet est à but éducatif uniquement. Il s'agit d'une démonstration technique de développement de bots Telegram en Python. L'auteur décline toute responsabilité quant à l'usage que chacun en fait. Il appartient à chaque utilisateur de s'assurer que son utilisation est conforme aux lois en vigueur dans son pays ainsi qu'aux conditions d'utilisation des services tiers auxquels il se connecte.
+> **Avertissement :** Ce projet est à but éducatif uniquement. Il s'agit d'une démonstration technique de développement de bots de messagerie (Telegram et Discord) en Python. L'auteur décline toute responsabilité quant à l'usage que chacun en fait. Il appartient à chaque utilisateur de s'assurer que son utilisation est conforme aux lois en vigueur dans son pays ainsi qu'aux conditions d'utilisation des services tiers auxquels il se connecte.
 
 ---
 
@@ -11,7 +11,7 @@
 ## Ce dont tu as besoin
 
 - Un ordinateur sous Windows, Mac ou Linux
-- L'application Telegram (sur ton téléphone **et/ou** ton ordinateur)
+- L'application Telegram (ce guide utilise Telegram ; une variante **Discord** est décrite en option à la fin)
 - Une connexion internet
 
 ---
@@ -159,9 +159,9 @@ Si tu veux envoyer des livres en **MOBI ou AZW3** (formats Kindle), installe Cal
 3. Lance l'installateur et suis les étapes (tout par défaut, c'est très simple)
 4. Redémarre le bot ensuite
 
-Le bot détecte Calibre automatiquement — tu verras `✓ ebook-convert trouvé` au démarrage.
+Le bot détecte Calibre automatiquement — tu verras `✓ trouvé` sur la ligne Calibre au démarrage.
 
-> Sans Calibre, le bot essaie quand même de convertir mais le résultat peut varier. Pour envoyer vers Kindle par email, Amazon convertit lui-même les fichiers, donc Calibre n'est pas indispensable dans ce cas.
+> **Bon à savoir :** le format **PDF fonctionne sans Calibre** (conversion intégrée). En revanche, **MOBI et AZW3 nécessitent Calibre** : sans lui, le bot t'enverra simplement l'**EPUB** à la place. Pour envoyer vers Kindle par email, Amazon convertit lui-même les fichiers, donc Calibre n'est pas indispensable dans ce cas.
 
 ---
 
@@ -219,12 +219,53 @@ Ouvre Telegram, trouve ton bot par son nom d'utilisateur, envoie `/start` et c'e
 2. Envoie un titre de livre
 3. Le bot cherche et t'affiche une liste de résultats — appuie sur un résultat
 4. Si tu as configuré plusieurs formats, le bot te demande lequel tu veux
-5. Si tu as configuré un email ou une adresse Kindle, le bot te demande où envoyer le livre (Telegram / Email / Kindle)
+5. Si tu as configuré un email ou une adresse Kindle, le bot te demande où envoyer le livre (ici dans le chat / Email / Kindle)
 6. Le fichier t'est envoyé 📖
 
 > Si tu as activé VirusTotal, le fichier est analysé automatiquement avant d'être envoyé. S'il est détecté comme dangereux, le bot le bloque et t'en informe.
 
 Tu peux modifier tes préférences à tout moment avec la commande `/settings`.
+
+---
+
+## (Optionnel) Utiliser le bot sur Discord
+
+Le bot fonctionne aussi sur **Discord** — à la place de Telegram **ou en même temps**. Tu gardes ta configuration existante et tu ajoutes simplement Discord.
+
+### 1. Créer ton bot Discord
+
+1. Va sur **[discord.com/developers/applications](https://discord.com/developers/applications)** et connecte-toi
+2. Clique sur **New Application** (en haut à droite), donne un nom, puis **Create**
+3. Dans le menu de gauche, clique sur **Bot**
+4. Descends jusqu'à **Privileged Gateway Intents** et **active** l'option **MESSAGE CONTENT INTENT** (indispensable pour que le bot lise tes messages), puis **Save Changes**
+5. Toujours dans **Bot**, clique sur **Reset Token** → **Copy** pour copier le **token** du bot (garde-le secret, comme un mot de passe)
+
+### 2. Inviter le bot
+
+1. Menu de gauche → **OAuth2** → **URL Generator**
+2. Coche **bot**, puis dans les permissions coche **Send Messages**, **Read Message History** et **Attach Files**
+3. Copie l'URL générée en bas, ouvre-la dans ton navigateur et ajoute le bot à ton serveur (tu pourras aussi lui parler en message privé)
+
+### 3. Trouver ton identifiant Discord
+
+1. Dans Discord : **Paramètres** (roue crantée) → **Avancés** → active **Mode développeur**
+2. Fais un **clic droit sur ton nom** → **Copier l'identifiant** (un long nombre)
+
+### 4. Renseigner le `.env`
+
+Ajoute ces deux lignes dans ton fichier `.env` :
+
+```
+DISCORD_TOKEN=colle-ici-le-token-du-bot
+DISCORD_ALLOWED_IDS=ton-identifiant-discord
+```
+
+(pour autoriser plusieurs personnes : `DISCORD_ALLOWED_IDS=111,222,333`)
+
+Relance le bot (double-clic sur `lancer.bat`). Dans Discord, écris `/start` au bot et c'est parti ! Les **boutons** remplacent les menus de Telegram.
+
+> Tu peux configurer **Telegram seul, Discord seul, ou les deux** — il suffit de remplir le(s) token(s) correspondant(s) dans le `.env`.
+> Sur Discord, la limite d'envoi de fichier est de **25 Mo** (contre 50 Mo sur Telegram) : les livres plus lourds sont ignorés automatiquement au profit d'un autre résultat.
 
 ---
 
@@ -248,4 +289,4 @@ Le fichier `docker-compose.yml` est déjà configuré pour l'utiliser.
 - **"Toutes les sources sont indisponibles"** → les DNS de ton opérateur internet bloquent parfois les serveurs de téléchargement (Libgen, etc.). Pour contourner ça, change les DNS de ta connexion pour utiliser ceux de Cloudflare (`1.1.1.1`) ou Google (`8.8.8.8`). Tuto complet : [Changer les DNS sur Windows — Le Crabe Info](https://lecrabeinfo.net/tutoriels/changer-les-dns-sur-windows/)
 - **L'email n'arrive pas** → vérifie que `SMTP_USER` et `SMTP_PASSWORD` sont bien remplis dans `.env`. Pour Gmail, le mot de passe doit être un **mot de passe d'application** (pas ton mot de passe habituel).
 - **Le livre n'arrive pas sur mon Kindle** → vérifie que l'adresse email de l'expéditeur (`SMTP_FROM`) est bien dans la liste des adresses autorisées sur ton compte Amazon.
-- **Je reçois un EPUB au lieu de MOBI/AZW3** → installe Calibre (étape 5b). Sans Calibre, la conversion peut ne pas fonctionner correctement.
+- **Je reçois un EPUB au lieu de MOBI/AZW3** → c'est normal sans Calibre : ces deux formats l'exigent, sinon le bot t'envoie l'EPUB à la place. Installe Calibre (étape 5b). Le **PDF**, lui, fonctionne sans Calibre.
