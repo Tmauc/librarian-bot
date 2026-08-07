@@ -27,4 +27,10 @@ class SearchResult:
     author: str = ""
     size_bytes: int = 0
     is_torrent: bool = False
+    # Optional display metadata (filled when the source has it; used for the rich
+    # result list and the detail card). Sources that don't provide them leave them blank.
+    year: str = ""
+    language: str = ""
+    cover: str = ""        # cover image URL
+    description: str = ""
     ref: dict[str, Any] = field(default_factory=dict)

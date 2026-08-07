@@ -22,3 +22,11 @@ async def fetch(
     if source is None:
         raise ValueError(f"Unknown source: {result.source!r}")
     return await source.download(result, on_progress, max_bytes)
+
+
+async def details(result: SearchResult) -> dict:
+    """Fetch optional extra metadata (description/cover) via the owning source."""
+    source = registry.get(result.source)
+    if source is None:
+        return {}
+    return await source.details(result)

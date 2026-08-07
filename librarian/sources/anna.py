@@ -71,6 +71,65 @@ def _extract_download_link(html: str, source_url: str) -> str | None:
     return None
 
 
+def _extract_card_meta(anchor) -> dict:
+    """From a result's title anchor, pull display metadata off the surrounding card.
+
+    Structure (Anna's Archive search result):
+      metadata line (anchor.parent): <div>filename</div> <a>title</a> <a>author</a> <a>publisher, …, year</a>
+      card (anchor.parent.parent): + a description div + a technical div
+                                   ("English [en] · EPUB · 1.8MB · 2003 · …")
+    Best-effort — any field that can't be found stays "".
+    """
+    meta = {"author": "", "year": "", "language": "", "ext": "", "cover": "", "description": "", "size_bytes": 0}
+    line = anchor.parent
+    card = line.parent if line is not None else None
+
+    if line is not None:
+        links = line.find_all("a")  # [title, author, publisher]
+        if len(links) >= 2:
+            meta["author"] = links[1].get_text(" ", strip=True)[:80]
+
+    if card is not None:
+        description = ""
+        for div in card.find_all("div"):
+            t = div.get_text(" ", strip=True)
+            if not t:
+                continue
+            # Technical line, e.g. "English [en] · EPUB · 1.8MB · 2003 · 📕 Book (fiction) · …"
+            if "·" in t and re.search(r"\d[.,\d]*\s*(MB|KB|GB|Mo|Ko|Go)", t, re.I):
+                mlang = re.match(r"([A-Za-zÀ-ÿ]+)", t)
+                if mlang:
+                    meta["language"] = mlang.group(1)
+                myear = re.search(r"\b(1[5-9]\d\d|20\d\d)\b", t)
+                if myear:
+                    meta["year"] = myear.group(1)
+                mext = re.search(r"\b(EPUB|PDF|MOBI|AZW3|FB2)\b", t, re.I)
+                if mext:
+                    meta["ext"] = mext.group(1).lower()
+                meta["size_bytes"] = _parse_size_from_text(t)
+            elif "·" not in t and "score:" not in t and "/" not in t[:40] and len(t) > len(description):
+                description = t
+        meta["description"] = description[:600]
+
+    # Cover: climb to the nearest ancestor holding an <img>, but stop before ascending
+    # into a container that describes more than one result (avoids a neighbour's cover).
+    node = anchor
+    for _ in range(4):
+        node = node.parent
+        if node is None:
+            break
+        md5s = {x.get("href", "").split("/md5/")[-1].split("?")[0] for x in node.select("a[href^='/md5/']")}
+        if len(md5s) > 1:
+            break
+        img = node.select_one("img")
+        if img is not None:
+            src = img.get("src") or img.get("data-src") or ""
+            if src.startswith("http"):
+                meta["cover"] = src
+            break
+    return meta
+
+
 class AnnaArchiveSource(Source):
     name = "anna"
 
@@ -138,12 +197,18 @@ class AnnaArchiveSource(Source):
                 if e in text.lower():
                     ext = e
                     break
+            meta = _extract_card_meta(a)
             seen[md5] = SearchResult(
                 source=self.name,
                 title=text[:120],
-                ext=_sanitize_ext(ext),
-                size_bytes=_parse_size_from_text(text),
+                author=meta["author"],
+                ext=_sanitize_ext(meta["ext"] or ext),
+                size_bytes=meta["size_bytes"] or _parse_size_from_text(text),
                 is_torrent=False,
+                year=meta["year"],
+                language=meta["language"],
+                cover=meta["cover"],
+                description=meta["description"],
                 ref={"md5": md5},
             )
             if len(seen) >= 10:
@@ -240,3 +305,28 @@ class AnnaArchiveSource(Source):
         except Exception as e:
             logger.warning(f"Stream failed for {_redact_url(url)}: {e}")
             return None
+
+    # -- detail card --------------------------------------------------------
+    async def details(self, result: SearchResult) -> dict:
+        """Fetch the book page for a fuller description + cover (for the detail card)."""
+        md5 = result.ref.get("md5", "")
+        if not self.enabled or not md5:
+            return {}
+        out: dict = {}
+        try:
+            async with self._client(20) as client:
+                resp = await client.get(f"{self.base_url}/md5/{md5}")
+                resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            m = soup.find("meta", attrs={"name": "description"})
+            if m and m.get("content"):
+                # content is "Author\n\nDescription\n\nPublisher" — keep the longest chunk.
+                chunks = [c.strip() for c in str(m["content"]).split("\n") if c.strip()]
+                if chunks:
+                    out["description"] = max(chunks, key=len)[:800]
+            og = soup.find("meta", attrs={"property": "og:image"})
+            if og and str(og.get("content", "")).startswith("http"):
+                out["cover"] = str(og["content"])
+        except Exception as e:
+            logger.warning(f"Anna details failed for md5={md5}: {e}")
+        return out

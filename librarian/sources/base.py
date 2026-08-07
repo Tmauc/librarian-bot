@@ -37,3 +37,9 @@ class Source(abc.ABC):
         """Fetch ``result`` (produced by this source) to a local file and return its
         path. ``max_bytes`` (0 = unlimited) lets the source abort oversized fetches
         early. Raise on failure."""
+
+    async def details(self, result: SearchResult) -> dict:
+        """Optionally fetch extra metadata for the detail card (e.g. a fuller
+        description, a better cover). Returns a dict with any of: ``description``,
+        ``cover``. Default: nothing extra. Should fail soft (return {})."""
+        return {}
