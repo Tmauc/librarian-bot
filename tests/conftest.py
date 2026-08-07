@@ -12,6 +12,19 @@ import pytest
 
 os.environ.setdefault("TELEGRAM_TOKEN", "123:test")
 os.environ.setdefault("ALLOWED_USER_IDS", "1")
+os.environ.setdefault("ALLOWED_FORMATS", "epub,pdf")  # deterministic for flow tests
+
+# Keep the suite hermetic: ignore a developer's local .env by blanking the optional
+# integrations (config's load_dotenv won't override values already in the environment).
+# Tests that need one set it explicitly via monkeypatch.
+for _key in (
+    "DISCORD_TOKEN", "DISCORD_ALLOWED_IDS",
+    "ANNA_ARCHIVE_URL", "PROWLARR_URL", "PROWLARR_API_KEY",
+    "SMTP_USER", "SMTP_PASSWORD", "VIRUSTOTAL_API_KEY", "GITHUB_REPO",
+    "DROPBOX_APP_KEY", "DROPBOX_APP_SECRET", "DROPBOX_REFRESH_TOKEN",
+    "GDRIVE_CLIENT_ID", "GDRIVE_CLIENT_SECRET", "GDRIVE_REFRESH_TOKEN", "GDRIVE_FOLDER_ID",
+):
+    os.environ.setdefault(_key, "")
 
 
 def build_minimal_epub(path: str) -> str:

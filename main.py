@@ -12,6 +12,8 @@ import logging
 import os
 import tempfile
 
+import certifi
+
 from librarian import config
 from librarian.core import conversion, delivery, scanning
 from librarian.sources import registry
@@ -64,6 +66,12 @@ async def _amain() -> None:
         clients.append("telegram")
 
     if config.DISCORD_TOKEN:
+        # discord.py (aiohttp) caches its default SSL context at import time; on the
+        # macOS python.org build that context often lacks CA certs and TLS fails with
+        # "certificate verify failed". certifi is already installed (httpx dep), so
+        # point OpenSSL at it BEFORE importing the adapter. setdefault respects an
+        # explicit override.
+        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
         from librarian.clients.discord.adapter import DiscordClient
 
         discord_client = DiscordClient()
