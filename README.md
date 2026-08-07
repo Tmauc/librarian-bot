@@ -2,14 +2,24 @@
 
 > 🇫🇷 Une version ultra-friendly en français avec un tutoriel pas à pas est disponible ici : [LISEZMOI.md](./LISEZMOI.md)
 
-A Telegram bot that searches and downloads ebooks on demand. Send it a book title, pick a result, get the file.
+A Telegram **and/or Discord** bot that searches and downloads ebooks on demand. Send it a book title, pick a result, get the file.
 
-> **Disclaimer:** This project is for educational purposes only. It is a technical demonstration of Telegram bot development, async Python, and API integration. The author takes no responsibility for how others configure or use this software. Users are solely responsible for ensuring their use complies with the laws of their country and the terms of service of any third-party service they connect to.
+> **Disclaimer:** This project is for educational purposes only. It is a technical demonstration of messaging-bot development (Telegram, Discord), async Python, and API integration. The author takes no responsibility for how others configure or use this software. Users are solely responsible for ensuring their use complies with the laws of their country and the terms of service of any third-party service they connect to.
+
+## 📖 Documentation
+
+Full docs live in [`docs/`](./docs/README.md): [architecture](./docs/architecture.md) ·
+[configuration](./docs/configuration.md) ·
+clients ([Telegram](./docs/clients/telegram.md), [Discord](./docs/clients/discord.md)) ·
+sources ([Anna's Archive](./docs/sources/anna-archive.md), [Prowlarr](./docs/sources/prowlarr.md)) ·
+[delivery](./docs/delivery.md) · [development](./docs/development.md).
+
+The step-by-step setup below is the quickest way to get running.
 
 ## Prerequisites
 
 - Python 3.11+ **or** Docker + Docker Compose
-- A Telegram account
+- A Telegram account (and/or a Discord account — see [the Discord guide](./docs/clients/discord.md))
 
 ---
 

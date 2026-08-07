@@ -24,6 +24,10 @@ The bot process is long-running. When working locally during development, kill t
 
 ## Architecture
 
+> Detailed docs live in [`docs/`](docs/README.md) — one page per client adapter, per
+> source, plus architecture/configuration/delivery/development. Update them when you add
+> or change an adapter or source.
+
 Ports & adapters (hexagonal). The core knows nothing about any messaging platform
 or any download provider — it talks only to interfaces. Package layout:
 
