@@ -117,6 +117,47 @@ class DiscordContext(ClientContext):
     async def _send_document(self, path: str, filename: str, caption: str) -> None:
         await self._channel.send(content=caption or None, file=discord.File(path, filename=filename))
 
+    async def ask_multi_choice(self, prompt: Content, choices: list[Choice], cancellable: bool = True) -> list[str]:
+        # Native multi-select — pick several tomes at once.
+        await self._finalize()
+        fut = self.session.park("multi")
+        embed, text = self._render(prompt)
+        view = _MultiSelectView(self._client, choices, cancellable)
+        self.session.handle = await self._channel.send(content=text, embed=embed, view=view)
+        return await fut
+
+
+class _MultiSelectView(discord.ui.View):
+    """A native multi-select (+ optional Cancel). Resolves with the list of values."""
+
+    def __init__(self, client: DiscordClient, choices: list[Choice], cancellable: bool):
+        super().__init__(timeout=None)
+        select = discord.ui.Select(
+            placeholder="Coche les livres à télécharger…", min_values=1, max_values=min(len(choices), 25)
+        )
+        for c in choices[:25]:
+            select.add_option(label=c.label[:100], value=c.value[:100], description=(c.description[:100] or None))
+        select.callback = self._select_cb(client)
+        self.add_item(select)
+        if cancellable:
+            btn = discord.ui.Button(label="⛔ Annuler", custom_id=CANCEL, style=discord.ButtonStyle.danger, row=1)
+            btn.callback = self._cancel_cb(client)
+            self.add_item(btn)
+
+    @staticmethod
+    def _select_cb(client: DiscordClient):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await client._on_multi(interaction, interaction.data["values"])
+
+        return _cb
+
+    @staticmethod
+    def _cancel_cb(client: DiscordClient):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await client._on_button(interaction, CANCEL)
+
+        return _cb
+
 
 class DiscordClient:
     """Owns per-user sessions and routes Discord events to the generic flow."""
@@ -199,6 +240,18 @@ class DiscordClient:
                 await interaction.message.edit(content="⛔ Annulé.", view=None)
             return
         s.resolve_choice(value)
+
+    async def _on_multi(self, interaction: discord.Interaction, values: list[str]) -> None:
+        uid = interaction.user.id
+        if not self._authorized(uid):
+            await interaction.response.defer()
+            return
+        s = self._session(uid)
+        if s.handle is None or interaction.message is None or interaction.message.id != s.handle.id:
+            await interaction.response.defer()
+            return
+        await interaction.response.defer()
+        s.resolve_multi(values)
 
     # -- lifecycle ----------------------------------------------------------
     async def start(self) -> None:

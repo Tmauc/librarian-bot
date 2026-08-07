@@ -17,19 +17,22 @@ logger = logging.getLogger(__name__)
 
 _VALID_FORMATS = {"epub", "pdf", "mobi", "azw3"}
 
-_PROMPT = """Tu transformes une demande de livre(s) en un plan de recherche.
+_PROMPT = """Tu extrais l'intention d'une demande de livre(s), pour lancer une recherche.
 Réponds UNIQUEMENT en JSON avec ce schéma exact :
-{{"queries": ["texte de recherche", ...], "language": "code ISO 639-1 ou \\"\\"", "format": "epub|pdf|mobi|azw3 ou \\"\\"", "title": "titre humain de l'ensemble", "series": true|false}}
+{{"query": "termes de recherche propres", "language": "code ISO 639-1 ou \\"\\"", "format": "epub|pdf|mobi|azw3 ou \\"\\"", "series": true|false}}
 
 Règles :
-- Si la demande vise une série / intégrale / plusieurs tomes, mets UN texte de recherche par tome, avec le titre canonique réel de chaque tome, dans l'ordre, et series=true.
-- Sinon un seul élément dans "queries" et series=false.
-- N'invente pas de tomes : si la série t'est inconnue, mets la demande telle quelle en un seul élément.
+- "query" = le nom de la série ou du livre (+ l'auteur si donné), SANS les mots parasites ("je veux", "l'intégrale de", "en VF", "tous les tomes"…). Juste de quoi chercher dans un catalogue.
+- N'INVENTE PAS de titres de tomes. Ne mets qu'un seul champ "query".
+- series=true si la demande vise une série / intégrale / plusieurs tomes ; sinon false.
+- Déduis la langue si mentionnée ("en VF"/"français" → "fr", "in English" → "en").
 - N'ajoute aucun texte hors du JSON.
 
-Exemple —
-Demande : "l'intégrale du Seigneur des anneaux en VF"
-{{"queries": ["Le Seigneur des anneaux La Communauté de l'anneau", "Le Seigneur des anneaux Les Deux Tours", "Le Seigneur des anneaux Le Retour du roi"], "language": "fr", "format": "", "title": "Le Seigneur des anneaux", "series": true}}
+Exemples —
+Demande : "Je veux l'intégrale des chevaliers d'émeraude en VF"
+{{"query": "Les Chevaliers d'Émeraude", "language": "fr", "format": "", "series": true}}
+Demande : "dune de frank herbert en epub"
+{{"query": "Dune Frank Herbert", "language": "", "format": "epub", "series": false}}
 
 Demande : "{request}"
 """
@@ -65,17 +68,13 @@ async def plan(request: str) -> Plan | None:
 
 def _to_plan(data: dict) -> Plan | None:
     """Validate and normalise the model's JSON into a Plan (None if unusable)."""
-    queries = data.get("queries")
-    if not isinstance(queries, list):
-        return None
-    queries = [str(q).strip() for q in queries if str(q).strip()][:12]
-    if not queries:
+    query = str(data.get("query", "")).strip()
+    if not query:
         return None
     fmt = str(data.get("format", "")).strip().lower()
     return Plan(
-        queries=queries,
+        query=query[:200],
         language=str(data.get("language", "")).strip().lower()[:5],
         desired_format=fmt if fmt in _VALID_FORMATS else "",
-        title=str(data.get("title", "")).strip()[:120],
-        series=len(queries) > 1,  # a multi-query plan is a batch, whatever the model says
+        series=bool(data.get("series")),
     )

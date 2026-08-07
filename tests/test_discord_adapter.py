@@ -7,7 +7,7 @@ import asyncio
 
 from librarian import config
 from librarian.clients.base import CANCEL, Choice
-from librarian.clients.discord.adapter import DiscordClient, _FlowView
+from librarian.clients.discord.adapter import DiscordClient, _FlowView, _MultiSelectView
 
 
 def _build_view(choices):
@@ -16,6 +16,19 @@ def _build_view(choices):
         return _FlowView(DiscordClient(), choices)
 
     return asyncio.run(build())
+
+
+def test_multiselect_view_is_a_native_multi_select():
+    async def build():
+        return _MultiSelectView(DiscordClient(), [Choice(f"Tome {i}", str(i), description="x") for i in range(4)], True)
+
+    view = asyncio.run(build())
+    selects = [c for c in view.children if type(c).__name__ == "Select"]
+    buttons = [c for c in view.children if type(c).__name__ == "Button"]
+    assert len(selects) == 1
+    assert selects[0].min_values == 1 and selects[0].max_values == 4  # pick several
+    assert len(selects[0].options) == 4
+    assert buttons and buttons[0].custom_id == CANCEL
 
 
 def test_flowview_maps_choices_to_button_custom_ids():

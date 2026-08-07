@@ -172,26 +172,27 @@ def test_search_offers_and_uses_email_destination(monkeypatch):
     assert not ctx.docs, "email destination must not upload to the chat"
 
 
-def test_batch_downloads_each_volume(monkeypatch):
+def test_batch_multiselect_downloads_chosen_volumes(monkeypatch):
     from librarian.core import planner
     from librarian.core.models import Plan
 
     async def fake_plan(request):
-        return Plan(queries=["tome 1", "tome 2"], series=True, title="Ma série", desired_format="epub")
+        return Plan(query="Ma série", series=True, desired_format="epub")
 
     async def scenario():
-        registry._ALL[:] = [StubSource(_epub_results())]
+        registry._ALL[:] = [StubSource(_epub_results())]  # 2 results
         monkeypatch.setattr(planner, "enabled", lambda: True)
         monkeypatch.setattr(planner, "plan", fake_plan)
         await prefs.set("test:1", "format", "epub")
         s = Session("test:1")
         ctx = FakeContext(s)
-        # "intégrale" triggers the batch; confirm "go"; single destination → runs autonomously
-        await drive(s, flow.run_search(ctx, "l'intégrale de ma série"), [("choice", "go")])
+        # "intégrale" triggers the batch → search → multi-select (base default: pick 0 then 1,
+        # which empties the list and ends selection) → single destination → downloads both
+        await drive(s, flow.run_search(ctx, "l'intégrale de ma série"), [("choice", "0"), ("choice", "1")])
         return ctx
 
     ctx = asyncio.run(scenario())
-    assert len(ctx.docs) == 2  # both volumes downloaded and delivered
+    assert len(ctx.docs) == 2  # both selected volumes downloaded and delivered
     assert "Terminé" in ctx.messages[-1]
 
 

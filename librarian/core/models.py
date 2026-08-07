@@ -38,15 +38,15 @@ class SearchResult:
 
 @dataclass
 class Plan:
-    """A search plan produced by the intelligence layer from a free-text request.
+    """A search intent produced by the intelligence layer from a free-text request.
 
-    ``queries`` is one search per wanted book (several for a series/intégrale, one
-    otherwise). ``language``/``desired_format`` are optional hints; ``title`` is a
-    human label for the batch; ``series`` marks a multi-volume intent.
+    We do NOT ask the LLM to enumerate volumes (a small local model hallucinates them
+    for niche series). Instead it extracts a clean ``query`` (the series/book name) +
+    ``language``/``desired_format`` hints and whether it's a multi-book request
+    (``series``). The real volumes then come from the source catalogue.
     """
 
-    queries: list[str]
+    query: str
     language: str = ""
     desired_format: str = ""
-    title: str = ""
     series: bool = False

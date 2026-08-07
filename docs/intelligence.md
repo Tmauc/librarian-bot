@@ -12,12 +12,18 @@ See also: [architecture](architecture.md) · [configuration](configuration.md).
 1. A message that looks like a multi-book request (contains *intégrale*, *tous les
    tomes*, *saga*, *trilogie*…) is sent to a local LLM
    ([`core/planner.py`](../librarian/core/planner.py)).
-2. The model returns a JSON **Plan**: `{queries, language, format, title, series}` —
-   one search query per volume, with canonical titles.
-3. The flow confirms the plan, asks for one destination, then for each query:
-   search → auto-pick the best result (EPUB-first) → download → deliver.
+2. The model returns a small JSON **Plan**: `{query, language, format, series}` — the
+   **series/book name** (cleaned of « je veux… en VF »), a language hint, and whether
+   it's a multi-book request. **It does NOT enumerate volumes** — a small local model
+   hallucinates titles for niche series.
+3. The flow searches the **real catalogue** (Anna's Archive) for that query, and the
+   user **multi-selects** the actual volumes to download. Each selected book is then
+   downloaded and delivered to one destination.
 
 Plain single-title searches (`dune`) skip the LLM entirely — same behaviour as before.
+
+Because the model only *extracts an intent* (not book knowledge), even a small model
+does the job; the real volumes always come from the catalogue.
 
 ## Setup (Ollama)
 
@@ -38,24 +44,15 @@ Plain single-title searches (`dune`) skip the LLM entirely — same behaviour as
 | `LLM_MODEL` | Ollama model name. Empty = disabled (plain search). |
 | `LLM_BASE_URL` | Ollama server URL (default `http://localhost:11434`). |
 
-## Model choice (benchmarked)
+## Model choice
 
-Tested on series-enumeration prompts (LOTR, Hunger Games, Harry Potter, ASoIaF) + single
-titles, at `temperature=0`:
+Since the model only extracts an intent (series name + language), the requirement is light —
+**`qwen2.5:3b`** and **`gemma2:2b`** both work well; the lighter `gemma2:2b` (1.6 GB) is a fine
+low-resource pick. Avoid `phi3.5` (over-confident) and stick to a clean instruction-follower.
 
-| Model | Verdict |
-|---|---|
-| **qwen2.5:3b** | ✅ **Best** — correct canonical titles (ASoIaF's 5 books spot-on), stable, ~1-2 s/query after warmup. **Recommended.** |
-| **gemma2:2b** | 🥈 Very good and lighter (1.6 GB, faster) — Hunger Games exact, LOTR right. Good low-resource choice. |
-| llama3.2:3b | 🟡 Mixed — misses some French series, hallucinates Harry Potter titles. |
-| phi3.5 | ❌ Confident hallucinations (wrong titles that *look* real) — avoid. |
-| qwen2.5:≤1.5b | ❌ Too weak — garbage enumeration. |
-
-## Notes
-
-- **Model size matters.** ~3B is the sweet spot; sub-2B models hallucinate volume lists.
-  Obscure series may still be missed — the batch just skips a volume it can't find. Anna's
-  fuzzy search tolerates the model's title formatting (e.g. a "Livre 1:" prefix).
+> Historical note: an earlier version asked the model to *enumerate* the volumes. That worked
+> only for very famous series and hallucinated niche ones (e.g. « Les Chevaliers d'Émeraude »),
+> so enumeration was dropped in favour of searching the real catalogue.
 - **Graceful fallback.** If `LLM_MODEL` is unset or the server is unreachable, the bot
   does a normal single search — no crash, no hang beyond the request timeout.
 - **Cross-platform.** Ollama runs the model locally; on a Raspberry Pi prefer a small

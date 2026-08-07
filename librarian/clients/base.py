@@ -26,6 +26,7 @@ from typing import Any
 # Reserved choice values interpreted by the machinery, not by the flow.
 CANCEL = "__cancel__"
 SKIP = "__skip__"
+DONE = "__done__"
 
 
 @dataclass
@@ -93,6 +94,13 @@ class Session:
             return False
         if self._pending_kind == "choice" or (self._pending_kind == "text" and value in self._allowed):
             self._pending.set_result(value)
+            self._clear()
+            return True
+        return False
+
+    def resolve_multi(self, values: list[str]) -> bool:
+        if self.is_waiting() and self._pending_kind == "multi":
+            self._pending.set_result(list(values))
             self._clear()
             return True
         return False
@@ -181,6 +189,22 @@ class ClientContext(abc.ABC):
         fut = self.session.park("text", allowed)
         self.session.handle = await self._send(prompt, opts or None)
         return await fut
+
+    async def ask_multi_choice(self, prompt: Content, choices: list[Choice], cancellable: bool = True) -> list[str]:
+        """Let the user pick SEVERAL options; returns the chosen values.
+
+        Default: pick one at a time + « Terminer » (works on any platform). Adapters
+        with a native multi-select (e.g. Discord) override this for a nicer UX.
+        """
+        selected: list[str] = []
+        remaining = list(choices)
+        while remaining:
+            v = await self.ask_choice(prompt, [*remaining, Choice("✅ Terminer la sélection", DONE)], cancellable)
+            if v == DONE:
+                break
+            selected.append(v)
+            remaining = [c for c in remaining if c.value != v]
+        return selected
 
     async def send_document(self, path: str, filename: str, caption: str) -> None:
         await self._send_document(path, filename, caption)

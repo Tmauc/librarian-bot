@@ -10,10 +10,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - **Smart multi-book requests via an optional local LLM.** A request like
-  *« l'intégrale du Seigneur des anneaux en VF »* is turned into a plan by a local Ollama
-  model, then the bot searches each volume, auto-picks the best result, and downloads/delivers
-  them all. Fully optional and local (`LLM_MODEL` / `LLM_BASE_URL`); unset = plain single search
-  as before. See [docs/intelligence.md](docs/intelligence.md). A ~3B model is recommended.
+  *« l'intégrale des chevaliers d'émeraude en VF »* is understood by a local Ollama model, which
+  extracts the series name + language (it does **not** invent volume titles). The bot then
+  searches the real catalogue and lets you **multi-select** the actual tomes to download and
+  deliver. Fully optional and local (`LLM_MODEL` / `LLM_BASE_URL`); unset = plain single search
+  as before. See [docs/intelligence.md](docs/intelligence.md). Discord shows a native
+  multi-select; other clients fall back to picking one at a time.
 - Also raised the result cap from 10 to 25 (Anna returns ~50; you were only seeing 7-9).
 
 ---

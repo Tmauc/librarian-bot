@@ -131,6 +131,7 @@ async def run_search(ctx: ClientContext, query: str) -> None:
     # Smart multi-book intent (« l'intégrale de X ») → LLM plan → batch, when enabled.
     if planner.enabled() and _looks_like_batch(query):
         p = await planner.plan(query)
+        logger.info(f"LLM plan for {query!r}: {p}")
         if p and p.series:
             await _run_batch(ctx, p)
             return
@@ -198,38 +199,36 @@ def _looks_like_batch(query: str) -> bool:
     return any(h in ql for h in _BATCH_HINTS)
 
 
-def _auto_pick(results):
-    """Best result for an unattended pick — results are already epub-first sorted."""
-    return results[0] if results else None
-
-
 async def _run_batch(ctx: ClientContext, plan) -> None:
-    """Search + auto-pick + download every volume in the plan, to one destination."""
-    lines = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(plan.queries))
+    """Search the series in the real catalogue, let the user multi-select the volumes,
+    then download every selected one to a single destination. No LLM-invented titles."""
+    await ctx.say(f"🔎 Recherche de « {plan.query} »…")
+    results = await search_service.search(plan.query, ctx.max_file_size)
+    if not results:
+        await ctx.say(f"😕 Rien trouvé pour « {plan.query} ». Essaie une autre formulation.")
+        return
+
     card = Card(
-        title=f"🧠 {plan.title or 'Plusieurs livres'}",
-        description=f"Je vais chercher et télécharger :\n\n{lines}",
-        footer="Lancer le téléchargement groupé ?",
+        title=f"🧠 {plan.query}",
+        description="Coche les tomes que tu veux télécharger :",
+        footer=f"{len(results)} résultat(s) trouvé(s)",
     )
-    if await ctx.ask_choice(card, [Choice("✅ Lancer", "go"), Choice("❌ Annuler", "no")]) != "go":
-        await ctx.say("🔍 Annulé.")
+    picked = await ctx.ask_multi_choice(card, [_result_choice(i, results[i]) for i in range(len(results))])
+    if not picked:
+        await ctx.say("🔍 Aucun tome sélectionné. À bientôt !")
         return
 
     destination = await _pick_destination(ctx)
     desired_fmt = plan.desired_format if plan.desired_format in config.ALLOWED_FORMATS else config.ALLOWED_FORMATS[0]
 
     done = 0
-    for i, q in enumerate(plan.queries, 1):
-        await ctx.say(f"📖 [{i}/{len(plan.queries)}] Recherche : {q}")
-        results = await search_service.search(q, ctx.max_file_size)
-        picked = _auto_pick(results)
-        if picked is None:
-            await ctx.say(f"❌ Introuvable : {q}")
-            continue
-        await _deliver(ctx, [picked], 0, desired_fmt, destination)
+    for value in picked:
+        r = results[int(value)]
+        await ctx.say(f"📖 {r.title[:60]}")
+        await _deliver(ctx, [r], 0, desired_fmt, destination)
         done += 1
 
-    await ctx.say(f"✅ Terminé — {done}/{len(plan.queries)} livre(s) livré(s).")
+    await ctx.say(f"✅ Terminé — {done} livre(s) livré(s).")
 
 
 # ===========================================================================
