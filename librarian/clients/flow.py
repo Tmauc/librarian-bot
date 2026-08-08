@@ -13,6 +13,7 @@ import os
 import re
 import tempfile
 import time
+from collections import Counter
 
 from librarian import config
 from librarian.clients.base import CANCEL, SKIP, Card, Choice, ClientContext
@@ -353,12 +354,15 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
             footer="Série identifiée via Wikidata + catalogue",
         )
         picked = await ctx.ask_multi_choice(card, choices)
+        # One canonical author for the whole series (editions disagree — translators,
+        # name order) so every tome is tagged identically and lands in ONE folder.
+        series_author = _dominant_author(entries)
         # Each pick keeps its candidate editions (download can fall back) + a metadata
-        # hint (canonical series/number/title from Wikidata) for clean tagging.
+        # hint (canonical author/series/number/title) for uniform tagging.
         chosen = []
         for v in picked:
             num, title, cands = entries[int(v)]
-            hint = BookMeta(title=title, series=plan.query, index=num, language=plan.language)
+            hint = BookMeta(title=title, author=series_author, series=plan.query, index=num, language=plan.language)
             chosen.append((_vol_label(num, title), cands, hint))
     else:  # fallback: unknown series → raw catalogue, user sorts it out
         await ctx.say(f"🔎 Recherche de « {plan.query} »…")
@@ -687,11 +691,19 @@ async def _deliver(
                     os.remove(p)
 
 
+def _dominant_author(entries: list[tuple]) -> str:
+    """One author for the whole series: the most common cleaned author across the matched
+    editions (they disagree — translators, « Nom Prénom » vs « Prénom Nom »)."""
+    names = [metadata.clean_author(cands[0].author) for _, _, cands in entries if cands and cands[0].author]
+    names = [n for n in names if n]
+    return Counter(names).most_common(1)[0][0] if names else ""
+
+
 def _build_filename(meta: BookMeta, fallback_title: str, ext: str) -> str:
-    """A clean filename; prefix the volume number in a series so tomes sort in order."""
-    base = re.sub(r"[^\w\s\-]", "", meta.title or fallback_title).strip()[:60] or "livre"
-    if meta.series and meta.index is not None:
-        base = f"{meta.index:02d} - {base}"
+    """A clean, filesystem-safe filename from the canonical title (keeps apostrophes)."""
+    base = (meta.title or fallback_title).replace(":", " -")
+    base = re.sub(r"[^\w\s\-']", "", base).strip()
+    base = re.sub(r"\s+", " ", base)[:80] or "livre"
     return f"{base}.{ext}"
 
 

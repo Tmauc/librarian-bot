@@ -75,6 +75,15 @@ def _lang_code(value: str) -> str:
     return v[:2]
 
 
+_AUTHOR_CUT = re.compile(r"\s*(?:;|/|\btrad\b|\btraduit\b|\btranslated\b).*$", re.IGNORECASE)
+
+
+def clean_author(author: str) -> str:
+    """Keep the primary author, dropping translators / secondary contributors that vary
+    per edition (« Suzanne Collins; trad. … par Guillaume Fournier » → « Suzanne Collins »)."""
+    return _AUTHOR_CUT.sub("", author or "").strip().strip(",").strip()
+
+
 def _clean_title(title: str) -> str:
     """Anna titles often repeat the tail (« … : Le feu dans le ciel : Le feu d »).
     Collapse consecutive duplicated « : » segments."""
@@ -86,12 +95,28 @@ def _clean_title(title: str) -> str:
     return " : ".join(out)[:200]
 
 
+def _compose_title(vol_title: str, series: str, index: int | None) -> str:
+    """The canonical display title. Series volume → « Série - TX : titre du tome »
+    (dropping the « : titre » when it just repeats the series name); standalone → the
+    title alone."""
+    vol = (vol_title or "").strip()
+    if not series:
+        return vol
+    tag = f"{series} - T{index}" if index is not None else series
+    if vol and vol.lower() != series.lower():
+        return f"{tag} : {vol}"
+    return tag
+
+
 def build(result, hint: BookMeta | None = None) -> BookMeta:
     """Assemble a BookMeta from what we already know (hint wins over the raw result)."""
     hint = hint or BookMeta()
+    vol_title = hint.title or _clean_title(getattr(result, "title", ""))
     return BookMeta(
-        title=hint.title or _clean_title(getattr(result, "title", "")),
-        author=getattr(result, "author", "") or hint.author,
+        # A hint (canonical, from Wikidata/series) wins so a series stays uniform; the
+        # raw per-edition author is cleaned of translators either way.
+        title=_compose_title(vol_title, hint.series, hint.index),
+        author=clean_author(hint.author or getattr(result, "author", "")),
         series=hint.series,
         index=hint.index,
         language=hint.language or _lang_code(getattr(result, "language", "")),
