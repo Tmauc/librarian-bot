@@ -235,6 +235,38 @@ def test_batch_fallback_multiselect(monkeypatch):
     assert "Terminé" in ctx.messages[-1]
 
 
+def test_fallback_plan_cleans_query_and_reads_language():
+    from librarian.clients.flow import _fallback_plan
+
+    p = _fallback_plan("L'intégrale d'Hunger games en vf")
+    assert p.query == "Hunger games" and p.language == "fr" and p.series is True
+    assert _fallback_plan("toute la saga Harry Potter").query == "Harry Potter"
+    assert _fallback_plan("la trilogie Millénium en anglais").language == "en"
+
+
+def test_batch_triggers_without_llm_via_fallback(monkeypatch):
+    """« l'intégrale de X » must still enter series mode when the LLM is down — not fall
+    back to a plain 25-result search (the bug the user hit)."""
+    from librarian.core import planner, series
+
+    async def no_vols(name, language="fr"):
+        return []
+
+    async def scenario():
+        registry._ALL[:] = [StubSource(_epub_results())]  # 2 catalogue results
+        monkeypatch.setattr(planner, "enabled", lambda: False)  # LLM unavailable
+        monkeypatch.setattr(series, "volumes", no_vols)
+        await prefs.set("test:1", "format", "epub")
+        s = Session("test:1")
+        ctx = FakeContext(s)
+        await drive(s, flow.run_search(ctx, "l'intégrale de dune"), [("choice", "0"), ("choice", "1")])
+        return ctx
+
+    ctx = asyncio.run(scenario())
+    assert len(ctx.docs) == 2  # batch ran (multi-select), not a single search
+    assert "Terminé" in ctx.messages[-1]
+
+
 def test_batch_series_from_wikidata(monkeypatch):
     """Known series → Wikidata volumes matched to catalogue files, then multi-select."""
     from librarian.core import planner, series

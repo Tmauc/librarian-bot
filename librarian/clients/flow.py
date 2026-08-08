@@ -222,6 +222,35 @@ async def _reorganize_cloud(ctx: ClientContext, scheme: str) -> None:
         await ctx.say(f"✅ Réorganisation terminée — {moved} livre(s) déplacé(s) sur {tracked} suivi(s).")
 
 
+_LANG_HINTS = {
+    "fr": ("vf", "vff", "en français", "en francais", "français", "francais", "french"),
+    "en": ("vo", "en anglais", "anglais", "english"),
+    "es": ("espagnol", "español", "spanish"),
+    "de": ("allemand", "deutsch", "german"),
+    "it": ("italien", "italiano", "italian"),
+}
+
+
+def _fallback_plan(query: str):
+    """A best-effort batch Plan without the LLM: strip the batch/ language phrases and
+    leading articles to recover the series name, and read the language from « en vf » etc.
+    Used when Ollama is down/slow so « l'intégrale de X » still triggers the series flow."""
+    from librarian.core.models import Plan
+
+    ql = query.lower()
+    language = next((code for code, hints in _LANG_HINTS.items() if any(h in ql for h in hints)), "")
+    q = query
+    for phrase in (*_BATCH_HINTS, "en vf", "en vo", "en français", "en francais", "en anglais",
+                   "vf", "vo", "français", "francais", "anglais", "english"):
+        q = re.sub(rf"\b{re.escape(phrase)}\b", " ", q, flags=re.IGNORECASE)
+    q = re.sub(r"\b[ld]['']", " ", q, flags=re.IGNORECASE)               # l'/d' → space
+    # Strip leading French quantifiers/articles left over (« toute la … », « du … »).
+    q = re.sub(r"^\s*(toute?s?\s+(la|le|les)\s+|tous\s+les\s+|de\s+|du\s+|des\s+|la\s+|le\s+|les\s+)+",
+               " ", q, flags=re.IGNORECASE)
+    q = re.sub(r"\s+", " ", q).strip(" '\"-")
+    return Plan(query=q or query, language=language, series=True)
+
+
 async def run_search(ctx: ClientContext, query: str) -> None:
     now = time.monotonic()
     if now - ctx.data.get("last_search_at", 0.0) < config.RATE_LIMIT_SECONDS:
@@ -236,13 +265,17 @@ async def run_search(ctx: ClientContext, query: str) -> None:
         await ctx.say(f"❌ Requête trop longue (max {config.MAX_QUERY_LENGTH} caractères).")
         return
 
-    # Smart multi-book intent (« l'intégrale de X ») → LLM plan → batch, when enabled.
-    if planner.enabled() and _looks_like_batch(query):
-        p = await planner.plan(query)
+    # Smart multi-book intent (« l'intégrale de X ») → batch. The LLM refines the query
+    # when it's up, but the batch keyword ALONE is enough — if the LLM is down/slow we
+    # fall back to a keyword-cleaned plan rather than silently doing a plain search.
+    if _looks_like_batch(query):
+        p = await planner.plan(query) if planner.enabled() else None
         logger.info(f"LLM plan for {query!r}: {p}")
-        if p and p.series:
-            await _run_batch(ctx, p)
-            return
+        if not (p and p.series):
+            p = _fallback_plan(query)
+            logger.info(f"LLM unavailable → fallback plan for {query!r}: {p}")
+        await _run_batch(ctx, p)
+        return
 
     await ctx.say("🔍 Recherche en cours…")
     results = await search_service.search(query, ctx.max_file_size)
