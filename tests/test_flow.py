@@ -145,6 +145,29 @@ def test_search_downloads_and_delivers_document():
     assert "Envoyé" in ctx.messages[-1]
 
 
+def test_single_search_groups_editions_and_offers_choice():
+    """The list shows one row per book (editions grouped); opening a multi-edition book
+    offers an edition chooser — so a popular title isn't a wall of near-duplicates."""
+    async def scenario():
+        registry._ALL[:] = [StubSource([
+            SearchResult("stub", "Dune", "epub", size_bytes=1000, ref={"md5": "a"}),
+            SearchResult("stub", "Dune", "epub", size_bytes=2000, ref={"md5": "b"}),
+            SearchResult("stub", "Foundation", "epub", size_bytes=1000, ref={"md5": "c"}),
+        ])]
+        await prefs.set("test:1", "format", "epub")
+        s = Session("test:1")
+        ctx = FakeContext(s)
+        # group 0 = Dune (2 editions) → pick edition "1" → Télécharger → epub
+        await drive(s, flow.run_search(ctx, "dune"),
+                    [("choice", "0"), ("choice", "1"), ("choice", "dl"), ("choice", "epub")])
+        return ctx
+
+    ctx = asyncio.run(scenario())
+    assert len(ctx.docs) == 1
+    assert any("2 livre(s)" in m for m in ctx.messages)   # 3 results → 2 books listed
+    assert any("2 éditions" in m for m in ctx.messages)   # edition chooser was shown
+
+
 def test_no_results_message():
     async def scenario():
         registry._ALL[:] = [StubSource([])]

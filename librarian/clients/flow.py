@@ -517,15 +517,45 @@ def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: s
 # ===========================================================================
 # Result list + detail card
 # ===========================================================================
+def _group_editions(results, shown: list[int]) -> list[list[int]]:
+    """Group the shown result indices by normalized title so the list stays a list of
+    BOOKS, not a flood of near-identical editions. Each group keeps catalogue order."""
+    groups: list[list[int]] = []
+    by_key: dict[str, int] = {}
+    for i in shown:
+        key = re.sub(r"[^\w]", "", (results[i].title or "").lower())
+        if key and key in by_key:
+            groups[by_key[key]].append(i)
+        else:
+            if key:
+                by_key[key] = len(groups)
+            groups.append([i])
+    return groups
+
+
 async def _choose_result(ctx: ClientContext, results, query: str, has_epub: bool) -> int:
-    """Show the enriched list; open a detail card on selection; return the chosen
-    index once the user hits Télécharger (loops back to the list on Retour)."""
+    """Show the list (one row per BOOK; editions grouped). Picking a book with several
+    editions opens an edition chooser; then a detail card. Returns the chosen index."""
     shown = [i for i, r in enumerate(results) if not (r.ext != "epub" and has_epub)]
+    groups = _group_editions(results, shown)
     while True:
-        pick = await ctx.ask_choice(
-            _results_card(query, results, shown), [_result_choice(i, results[i]) for i in shown]
-        )
-        idx = int(pick)
+        pick = int(await ctx.ask_choice(
+            _results_card(query, results, groups), [_group_choice(g, results, editions) for g, editions in enumerate(groups)]
+        ))
+        editions = groups[pick]
+        idx = editions[0]
+        if len(editions) > 1:  # let the user pick the edition (year/size/format differ)
+            ev = await ctx.ask_choice(
+                Card(
+                    title=f"📚 {(results[idx].title or '?')[:70]}",
+                    description=f"{len(editions)} éditions — choisis laquelle :",
+                    footer="Année · taille · format",
+                ),
+                [_result_choice(i, results[i]) for i in editions] + [Choice("⬅️ Retour", "back")],
+            )
+            if ev == "back":
+                continue
+            idx = int(ev)
         action = await ctx.ask_choice(
             await _detail_card(results[idx]),
             [Choice("⬇️ Télécharger", "dl"), Choice("⬅️ Retour à la liste", "back")],
@@ -543,16 +573,23 @@ def _result_choice(i: int, r) -> Choice:
     return Choice(label=f"{i + 1}. {(r.title or '?')[:80]}", value=str(i), description=_meta_line(r)[:100])
 
 
-def _results_card(query: str, results, shown: list[int]) -> Card:
+def _group_choice(g: int, results, editions: list[int]) -> Choice:
+    r = results[editions[0]]
+    suffix = f"  ·  {len(editions)} éditions" if len(editions) > 1 else ""
+    return Choice(label=f"{g + 1}. {(r.title or '?')[:78]}", value=str(g), description=(_meta_line(r) + suffix)[:100])
+
+
+def _results_card(query: str, results, groups: list[list[int]]) -> Card:
     lines = []
-    for n, i in enumerate(shown, 1):
-        r = results[i]
+    for n, editions in enumerate(groups, 1):
+        r = results[editions[0]]
         icon = "📥" if not r.is_torrent else "🌀"
-        lines.append(f"{n}. {icon} {r.title}\n     {_meta_line(r)}")
+        extra = f"  ·  {len(editions)} éditions" if len(editions) > 1 else ""
+        lines.append(f"{n}. {icon} {r.title}\n     {_meta_line(r)}{extra}")
     return Card(
-        title=f"📚 {len(shown)} résultat(s) pour « {query[:60]} »",
+        title=f"📚 {len(groups)} livre(s) pour « {query[:60]} »",
         description="\n\n".join(lines)[:3900],
-        footer="Choisis un livre pour voir sa fiche",
+        footer="Choisis un livre — les autres éditions s'affichent ensuite",
     )
 
 
