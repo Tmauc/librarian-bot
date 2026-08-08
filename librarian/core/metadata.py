@@ -79,9 +79,16 @@ _AUTHOR_CUT = re.compile(r"\s*(?:;|/|\btrad\b|\btraduit\b|\btranslated\b).*$", r
 
 
 def clean_author(author: str) -> str:
-    """Keep the primary author, dropping translators / secondary contributors that vary
-    per edition (« Suzanne Collins; trad. … par Guillaume Fournier » → « Suzanne Collins »)."""
-    return _AUTHOR_CUT.sub("", author or "").strip().strip(",").strip()
+    """Canonical author: drop translators/secondary contributors that vary per edition
+    (« Suzanne Collins; trad. … par Guillaume Fournier » → « Suzanne Collins ») AND
+    normalise « Nom, Prénom » → « Prénom Nom » so editions that disagree on name order
+    land the SAME (« Howey, Hugh » and « Hugh Howey » → « Hugh Howey »)."""
+    a = _AUTHOR_CUT.sub("", author or "").strip().strip(",").strip()
+    if a.count(",") == 1:  # "Last, First" → "First Last"
+        last, first = (p.strip() for p in a.split(","))
+        if last and first:
+            a = f"{first} {last}"
+    return a
 
 
 def _clean_title(title: str) -> str:

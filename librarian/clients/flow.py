@@ -392,7 +392,7 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
     in the catalogue (in the requested language), and let the user multi-select the tomes.
     Falls back to raw catalogue results if the series is unknown to Wikidata."""
     await ctx.say(f"🔎 Identification de « {plan.query} »…")
-    vols = await series.volumes(plan.query, plan.language or "fr", plan.author)
+    wiki_author, vols = await series.resolve(plan.query, plan.language or "fr", plan.author)
     entries = await _series_entries(ctx, plan, vols) if vols else []
 
     if entries:  # clean, ordered "Tome N — title" → several candidate editions
@@ -406,9 +406,10 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
             footer="Série identifiée via Wikidata + catalogue",
         )
         picked = await ctx.ask_multi_choice(card, choices)
-        # One canonical author for the whole series (editions disagree — translators,
-        # name order) so every tome is tagged identically and lands in ONE folder.
-        series_author = _dominant_author(entries)
+        # One canonical author for the WHOLE series, stable across runs so tomes never
+        # split into two folders: the user's stated author → Wikidata's P50 → a best-guess
+        # from the matched editions (each normalised for name order / translators).
+        series_author = metadata.clean_author(plan.author or wiki_author or _dominant_author(entries))
         # Download in the ORDER SHOWN (tome order) — the multi-select may hand back the
         # picks unordered (a set), which made downloads look random.
         chosen = []

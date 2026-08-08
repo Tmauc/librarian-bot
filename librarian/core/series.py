@@ -7,6 +7,7 @@ series name we resolve the series entity and return its ordered volume titles (P
 
 import logging
 import re
+from collections import Counter
 
 import httpx
 
@@ -25,15 +26,21 @@ _SPARQL = "https://query.wikidata.org/sparql"
 
 
 async def volumes(name: str, language: str = "fr", author: str = "") -> list[tuple[int | None, str]]:
-    """Return the series' ordered volumes as ``(ordinal, title)`` pairs (or []).
+    """Ordered volumes only (see :func:`resolve`)."""
+    _, vols = await resolve(name, language, author)
+    return vols
 
-    ``ordinal`` is the volume number (P1545) when Wikidata has it, else None.
-    Labels are requested in ``language`` first (fallback English). ``author`` (optional)
-    disambiguates same-named series — only volumes written by that author are kept; if the
-    author matches nothing we ignore it rather than return empty.
+
+async def resolve(name: str, language: str = "fr", author: str = "") -> tuple[str, list[tuple[int | None, str]]]:
+    """Resolve a series to ``(canonical_author, ordered_volumes)``.
+
+    ``ordinal`` is the volume number (P1545) when Wikidata has it, else None. Labels are
+    requested in ``language`` first (fallback English). ``canonical_author`` is the series'
+    Wikidata author (P50) — stable across runs, unlike a per-download best-guess. ``author``
+    (optional) disambiguates same-named series; if it matches nothing we ignore it.
     """
     if not name.strip():
-        return []
+        return "", []
     try:
         async with httpx.AsyncClient(timeout=25, headers=_UA) as client:
             resp = await client.get(
@@ -48,26 +55,26 @@ async def volumes(name: str, language: str = "fr", author: str = "") -> list[tup
             resp.raise_for_status()
             candidates = [r["id"] for r in resp.json().get("search", []) if r.get("id", "").startswith("Q")]
 
-            best = await _best_over(client, candidates, language, author)
+            best_author, best = await _best_over(client, candidates, language, author)
             if not best and author:  # the author didn't match Wikidata → drop the filter
-                best = await _best_over(client, candidates, language, "")
-            return best
+                best_author, best = await _best_over(client, candidates, language, "")
+            return best_author, best
     except Exception as e:
         logger.warning(f"Wikidata series lookup failed for {name!r}: {e}")
-        return []
+        return "", []
 
 
-async def _best_over(client, candidates, language, author) -> list[tuple[int | None, str]]:
-    """The longest volume list across the candidate entities (stops at the first solid
-    series ≥ 3 volumes)."""
+async def _best_over(client, candidates, language, author) -> tuple[str, list[tuple[int | None, str]]]:
+    """The longest volume list (+ its author) across the candidates (stops at ≥ 3)."""
     best: list[tuple[int | None, str]] = []
+    best_author = ""
     for qid in candidates:
-        vols = await _members(client, qid, language, author)
+        vols, vol_author = await _members(client, qid, language, author)
         if len(vols) > len(best):
-            best = vols
+            best, best_author = vols, vol_author
         if len(best) >= 3:  # a real series — good enough, stop early
             break
-    return best
+    return best_author, best
 
 
 def _author_filter(author: str) -> str:
@@ -83,18 +90,19 @@ def _author_filter(author: str) -> str:
     return f"?vol wdt:P50 ?auth . ?auth rdfs:label ?authL . FILTER({conds})"
 
 
-async def _members(client, qid, language, author="") -> list[tuple[int | None, str]]:
-    """Ordered book volumes for a candidate in ONE query. ``qid`` may BE the series, or —
-    for an ambiguous name like « Dune » where wbsearch returns the first novel — a book
-    that is *part of* the series: ``wd:qid wdt:P179? ?s`` resolves ?s to qid itself OR the
-    series qid belongs to, so both cases are covered without extra round-trips."""
+async def _members(client, qid, language, author="") -> tuple[list[tuple[int | None, str]], str]:
+    """Ordered book volumes (+ the series' canonical author) for a candidate, in ONE query.
+    ``qid`` may BE the series, or — for an ambiguous name like « Dune » where wbsearch
+    returns the first novel — a book *part of* the series: ``wd:qid wdt:P179? ?s`` resolves
+    ?s to qid itself OR the series qid belongs to."""
     langs = f"{language},en" if language and language != "en" else "en"
     query = (
-        "SELECT ?vol ?volLabel ?ord WHERE {"
+        "SELECT ?vol ?volLabel ?ord ?authorLabel WHERE {"
         f"  wd:{qid} wdt:P179? ?s ."                    # ?s = qid, or the series qid is part of
         "  ?vol wdt:P179 ?s ."
         f"  ?vol wdt:P31/wdt:P279* {_WRITTEN_WORK} ."   # books only — exclude films/games/…
         f"  {_author_filter(author)}"
+        "  OPTIONAL { ?vol wdt:P50 ?author . }"
         "  OPTIONAL { ?vol p:P179 [ ps:P179 ?s ; pq:P1545 ?ord ] }"
         f'  SERVICE wikibase:label {{ bd:serviceParam wikibase:language "{langs}". }}'
         "} ORDER BY xsd:integer(?ord)"
@@ -103,12 +111,20 @@ async def _members(client, qid, language, author="") -> list[tuple[int | None, s
     resp.raise_for_status()
     out: list[tuple[int | None, str]] = []
     seen: set[str] = set()
+    authors: list[str] = []
     for b in resp.json()["results"]["bindings"]:
         label = b.get("volLabel", {}).get("value", "").strip()
-        # skip volumes with no human label (Wikidata returns the Q-id then) + duplicates
-        if not label or (label.startswith("Q") and label[1:].isdigit()) or label.lower() in seen:
+        # Skip: no human label (Wikidata returns the Q-id), duplicates, and OMNIBUS editions
+        # (« Tome A / Tome B ») — combined volumes that would download as one confusing file
+        # (e.g. L'Assassin Royal); the individual volumes are listed separately anyway.
+        if (not label or (label.startswith("Q") and label[1:].isdigit())
+                or label.lower() in seen or " / " in label):
             continue
         seen.add(label.lower())
         ordv = b.get("ord", {}).get("value", "")
         out.append((int(ordv) if ordv.isdigit() else None, label))
-    return out
+        al = b.get("authorLabel", {}).get("value", "").strip()
+        if al and not (al.startswith("Q") and al[1:].isdigit()):
+            authors.append(al)
+    author_str = Counter(authors).most_common(1)[0][0] if authors else ""
+    return out, author_str

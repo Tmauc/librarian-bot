@@ -51,6 +51,12 @@ def test_clean_author_drops_translators():
     assert metadata.clean_author("Anne Robillard") == "Anne Robillard"
 
 
+def test_clean_author_normalises_name_order():
+    # "Last, First" and "First Last" must collapse to the SAME author (folder stability)
+    assert metadata.clean_author("Howey, Hugh") == "Hugh Howey"
+    assert metadata.clean_author("Hugh Howey") == "Hugh Howey"
+
+
 def test_build_without_hint_cleans_result_title():
     r = SearchResult("anna", "Dune : Dune", "epub", language="English")
     m = metadata.build(r)

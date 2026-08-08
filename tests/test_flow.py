@@ -249,13 +249,13 @@ def test_batch_fallback_multiselect(monkeypatch):
         return Plan(query="Ma série", series=True, desired_format="epub")
 
     async def no_vols(name, language="fr", author=""):
-        return []
+        return "", []
 
     async def scenario():
         registry._ALL[:] = [StubSource(_epub_results())]  # 2 results
         monkeypatch.setattr(planner, "enabled", lambda: True)
         monkeypatch.setattr(planner, "plan", fake_plan)
-        monkeypatch.setattr(series, "volumes", no_vols)
+        monkeypatch.setattr(series, "resolve", no_vols)
         await prefs.set("test:1", "format", "epub")
         s = Session("test:1")
         ctx = FakeContext(s)
@@ -304,12 +304,12 @@ def test_batch_triggers_without_llm_via_fallback(monkeypatch):
     from librarian.core import planner, series
 
     async def no_vols(name, language="fr", author=""):
-        return []
+        return "", []
 
     async def scenario():
         registry._ALL[:] = [StubSource(_epub_results())]  # 2 catalogue results
         monkeypatch.setattr(planner, "enabled", lambda: False)  # LLM unavailable
-        monkeypatch.setattr(series, "volumes", no_vols)
+        monkeypatch.setattr(series, "resolve", no_vols)
         await prefs.set("test:1", "format", "epub")
         s = Session("test:1")
         ctx = FakeContext(s)
@@ -330,7 +330,7 @@ def test_batch_series_from_wikidata(monkeypatch):
         return Plan(query="Ma série", series=True, desired_format="epub")
 
     async def fake_vols(name, language="fr", author=""):
-        return [(1, "Alpha"), (2, "Beta")]
+        return "", [(1, "Alpha"), (2, "Beta")]
 
     class SeriesStub(Source):
         name = "stub"
@@ -350,7 +350,7 @@ def test_batch_series_from_wikidata(monkeypatch):
         registry._ALL[:] = [SeriesStub()]
         monkeypatch.setattr(planner, "enabled", lambda: True)
         monkeypatch.setattr(planner, "plan", fake_plan)
-        monkeypatch.setattr(series, "volumes", fake_vols)
+        monkeypatch.setattr(series, "resolve", fake_vols)
         await prefs.set("test:1", "format", "epub")
         s = Session("test:1")
         ctx = FakeContext(s)
@@ -371,7 +371,7 @@ def test_batch_falls_back_across_editions(monkeypatch):
         return Plan(query="Ma série", series=True, desired_format="epub")
 
     async def fake_vols(name, language="fr", author=""):
-        return [(1, "Alpha")]
+        return "", [(1, "Alpha")]
 
     class FlakySource(Source):
         name = "stub"
@@ -395,7 +395,7 @@ def test_batch_falls_back_across_editions(monkeypatch):
         registry._ALL[:] = [FlakySource()]
         monkeypatch.setattr(planner, "enabled", lambda: True)
         monkeypatch.setattr(planner, "plan", fake_plan)
-        monkeypatch.setattr(series, "volumes", fake_vols)
+        monkeypatch.setattr(series, "resolve", fake_vols)
         await prefs.set("test:1", "format", "epub")
         s = Session("test:1")
         ctx = FakeContext(s)

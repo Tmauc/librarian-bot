@@ -60,6 +60,20 @@ def test_missing_ordinal_is_none(monkeypatch):
     assert asyncio.run(series.volumes("x")) == [(None, "A"), (None, "B"), (None, "C")]
 
 
+def test_resolve_drops_omnibus_and_returns_author(monkeypatch):
+    api = {"search": [{"id": "Q1"}]}
+    sparql = {"results": {"bindings": [
+        {"volLabel": {"value": "L'Apprenti assassin"}, "ord": {"value": "1"}, "authorLabel": {"value": "Robin Hobb"}},
+        {"volLabel": {"value": "L'Assassin du roi / La Nef du crépuscule"}, "ord": {"value": "2"},  # omnibus → dropped
+         "authorLabel": {"value": "Robin Hobb"}},
+        {"volLabel": {"value": "La Nef du crépuscule"}, "ord": {"value": "3"}, "authorLabel": {"value": "Robin Hobb"}},
+    ]}}
+    _install(monkeypatch, api, sparql)
+    author, vols = asyncio.run(series.resolve("L'Assassin Royal"))
+    assert author == "Robin Hobb"
+    assert vols == [(1, "L'Apprenti assassin"), (3, "La Nef du crépuscule")]  # « A / B » omnibus removed
+
+
 def test_author_filter_requires_every_name_word():
     from librarian.core.series import _author_filter
 
