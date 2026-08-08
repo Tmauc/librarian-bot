@@ -202,23 +202,24 @@ class AnnaArchiveSource(Source):
 
     async def _search_html(self, client: httpx.AsyncClient, query: str) -> list[SearchResult]:
         resp = None
-        for attempt in range(4):  # Anna rate-limits big series (429) → back off and retry
+        backoff = (3, 6, 10, 15, 20)  # Anna rate-limits big series (429) → back off and retry
+        for attempt, wait in enumerate(backoff):
             try:
                 resp = await client.get(
                     f"{self.base_url}/search",
                     params={"q": query, "lang": "", "content": "book_any", "ext": "epub,pdf,mobi"},
                 )
                 if resp.status_code == 429:
-                    await asyncio.sleep(2 * (attempt + 1))
+                    await asyncio.sleep(wait)
                     resp = None
                     continue
                 resp.raise_for_status()
                 break
             except Exception as e:
-                if attempt == 3:
+                if attempt == len(backoff) - 1:
                     logger.error(f"Anna's Archive HTML search failed: {e}")
                     return []
-                await asyncio.sleep(1.5 * (attempt + 1))
+                await asyncio.sleep(wait)
         if resp is None:
             logger.warning(f"Anna search gave up (rate-limited) for {query!r}")
             return []

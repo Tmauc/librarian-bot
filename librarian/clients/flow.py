@@ -564,7 +564,7 @@ async def _search_volume(ctx: ClientContext, series_name: str, num: int | None, 
 
 
 def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: str = "",
-                  author: str = "", edition: str = DEFAULT_EDITION, limit: int = 5):
+                  author: str = "", edition: str = DEFAULT_EDITION, limit: int = 7):
     """Up to ``limit`` plausible editions of a volume. A candidate is plausible if it
     carries the right tome number OR shares a distinctive word with the sub-title. Ranked:
     the requested AUTHOR first (« Dune » by Frank Herbert before « Avant Dune » by Brian
