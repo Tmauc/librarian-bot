@@ -28,10 +28,18 @@ def _read_bytes(path: str) -> bytes:
         return f.read()
 
 
+_FOLDER_MIME = "application/vnd.google-apps.folder"
+
+
 class GoogleDriveDestination(CloudUploadDestination):
     name = "gdrive"
     label = "☁️ Google Drive"
     where = "Google Drive"
+
+    def __init__(self) -> None:
+        # Cache resolved folder ids: (parent_id, name) → id, to avoid re-querying
+        # the same author/series folder on every upload of a batch.
+        self._folder_cache: dict[tuple[str, str], str] = {}
 
     async def available(self, ctx: ClientContext) -> bool:
         return bool(
@@ -51,10 +59,49 @@ class GoogleDriveDestination(CloudUploadDestination):
         resp.raise_for_status()
         return resp.json()["access_token"]
 
-    async def _upload(self, path: str, filename: str) -> None:
+    async def _folder_id(self, client: httpx.AsyncClient, headers: dict, parent: str, name: str) -> str:
+        """Find (or create) the folder ``name`` under ``parent``; return its id (cached)."""
+        key = (parent, name)
+        if key in self._folder_cache:
+            return self._folder_cache[key]
+        safe = name.replace("\\", "\\\\").replace("'", "\\'")
+        query = (
+            f"name = '{safe}' and mimeType = '{_FOLDER_MIME}' "
+            f"and '{parent}' in parents and trashed = false"
+        )
+        resp = await client.get(
+            _FILES_URL,
+            params={"q": query, "fields": "files(id)", "supportsAllDrives": "true",
+                    "includeItemsFromAllDrives": "true"},
+            headers=headers,
+        )
+        resp.raise_for_status()
+        files = resp.json().get("files", [])
+        if files:
+            folder_id = files[0]["id"]
+        else:
+            created = await client.post(
+                _FILES_URL,
+                params={"supportsAllDrives": "true"},
+                headers={**headers, "Content-Type": "application/json"},
+                json={"name": name, "mimeType": _FOLDER_MIME, "parents": [parent]},
+            )
+            created.raise_for_status()
+            folder_id = created.json()["id"]
+        self._folder_cache[key] = folder_id
+        return folder_id
+
+    async def _upload(self, path: str, filename: str, subfolders: list[str]) -> None:
         async with httpx.AsyncClient(timeout=90) as client:
             access = await self._access_token(client)
             headers = {"Authorization": f"Bearer {access}"}
+
+            # 0) resolve the target folder chain (root → author → series …)
+            parent = config.GDRIVE_FOLDER_ID or "root"
+            for segment in subfolders:
+                parent = await self._folder_id(client, headers, parent, segment)
+            target = parent if (subfolders or config.GDRIVE_FOLDER_ID) else ""
+
             data = await asyncio.get_event_loop().run_in_executor(None, _read_bytes, path)
 
             # 1) upload the media, get a file id
@@ -64,10 +111,10 @@ class GoogleDriveDestination(CloudUploadDestination):
             up.raise_for_status()
             file_id = up.json()["id"]
 
-            # 2) name it (and move it into the destination folder, if any)
+            # 2) name it (and move it into the resolved folder, if any)
             params = {"supportsAllDrives": "true"}
-            if config.GDRIVE_FOLDER_ID:
-                params["addParents"] = config.GDRIVE_FOLDER_ID
+            if target:
+                params["addParents"] = target
             patch = await client.patch(
                 f"{_FILES_URL}/{file_id}",
                 params=params,

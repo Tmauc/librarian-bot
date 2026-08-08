@@ -28,7 +28,7 @@ from librarian.core import (
 )
 from librarian.core.metadata import BookMeta
 from librarian.destinations import registry as destinations
-from librarian.destinations.base import Destination
+from librarian.destinations.base import DEFAULT_SORT_SCHEME, SORT_SCHEMES, Destination
 
 logger = logging.getLogger(__name__)
 
@@ -92,27 +92,36 @@ async def run_start(ctx: ClientContext) -> None:
 async def run_settings(ctx: ClientContext) -> None:
     while True:
         p = await prefs.get(ctx.user_key)
+        has_cloud = any(d.name in ("dropbox", "gdrive") for d in await destinations.available_for(ctx))
         text = (
             "⚙️ Vos préférences :\n\n"
             f"• Format : {p.get('format', 'epub').upper()}\n"
             f"• Email : {p.get('email', 'non configuré')}\n"
             f"• Kindle : {p.get('kindle_email', 'non configuré')}"
         )
-        choice = await ctx.ask_choice(
-            text,
-            [
-                Choice("📚 Format", "fmt"),
-                Choice("📧 Email", "email"),
-                Choice("📖 Kindle", "kindle"),
-                Choice("❌ Supprimer mes données", "delete"),
-                Choice("✅ Fermer", "close"),
-            ],
-            cancellable=False,
-        )
+        if has_cloud:
+            scheme = p.get("sort_scheme", DEFAULT_SORT_SCHEME)
+            text += f"\n• Rangement cloud : {SORT_SCHEMES.get(scheme, SORT_SCHEMES[DEFAULT_SORT_SCHEME])}"
+        options = [
+            Choice("📚 Format", "fmt"),
+            Choice("📧 Email", "email"),
+            Choice("📖 Kindle", "kindle"),
+        ]
+        if has_cloud:
+            options.append(Choice("📂 Rangement cloud", "sort"))
+        options += [Choice("❌ Supprimer mes données", "delete"), Choice("✅ Fermer", "close")]
+        choice = await ctx.ask_choice(text, options, cancellable=False)
         if choice == "close":
             await ctx.say("👍 À bientôt ! Envoie un titre quand tu veux.")
             return
-        if choice == "fmt":
+        if choice == "sort":
+            scheme = await ctx.ask_choice(
+                "📂 Comment ranger les livres dans ton cloud ?",
+                [Choice(label, key) for key, label in SORT_SCHEMES.items()],
+                cancellable=False,
+            )
+            await prefs.set(ctx.user_key, "sort_scheme", scheme)
+        elif choice == "fmt":
             fmt = await ctx.ask_choice(
                 "📚 Quel format préfères-tu ?",
                 [Choice(_FMT_LABELS[f], f) for f in config.ALLOWED_FORMATS if f in _FMT_LABELS],
@@ -530,11 +539,14 @@ async def _deliver(
                 await ctx.say(f"⚠️ Conversion {desired_fmt.upper()} échouée, envoi en EPUB à la place.")
                 send_path, send_ext = file_path, ext
 
-        # Rewrite metadata (title/author/series+number/language/cover) before scan+send.
-        # Best-effort: a tagging failure never blocks delivery.
+        # Build clean metadata once (Wikidata hint + Anna + Open Library) — reused to
+        # tag the file, name it, and file it into folders on the destination.
+        book_meta = await metadata.prepare(result, meta_hint)
+
+        # Rewrite metadata into the file before scan+send. Best-effort: never blocks.
         if send_ext in ("epub", "mobi", "azw3"):
             try:
-                if await metadata.tag(send_path, send_ext, result, meta_hint):
+                if await metadata.apply(send_path, send_ext, book_meta):
                     logger.info(f"Metadata tagged: {title[:60]!r}")
             except Exception as e:
                 logger.warning(f"Metadata tagging failed for {title[:60]!r}: {e}")
@@ -543,16 +555,22 @@ async def _deliver(
         if vt_caption is None:  # blocked as malicious
             return False
 
-        safe_title = re.sub(r"[^\w\s\-]", "", title).strip()[:60] or "livre"
-        filename = f"{safe_title}.{send_ext}"
-
-        await destination.deliver(ctx, send_path, filename, title, vt_caption)
+        filename = _build_filename(book_meta, title, send_ext)
+        await destination.deliver(ctx, send_path, filename, title, vt_caption, meta=book_meta)
         return True
     finally:
         for p in (file_path, converted_path):
             if p and p.startswith(tempfile.gettempdir()):
                 with contextlib.suppress(Exception):
                     os.remove(p)
+
+
+def _build_filename(meta: BookMeta, fallback_title: str, ext: str) -> str:
+    """A clean filename; prefix the volume number in a series so tomes sort in order."""
+    base = re.sub(r"[^\w\s\-]", "", meta.title or fallback_title).strip()[:60] or "livre"
+    if meta.series and meta.index is not None:
+        base = f"{meta.index:02d} - {base}"
+    return f"{base}.{ext}"
 
 
 async def _fetch_with_retry(ctx: ClientContext, results, start_idx: int, desired_fmt: str):

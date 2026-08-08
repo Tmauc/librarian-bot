@@ -45,11 +45,15 @@ class DropboxDestination(CloudUploadDestination):
         resp.raise_for_status()
         return resp.json()["access_token"]
 
-    async def _upload(self, path: str, filename: str) -> None:
-        folder = (config.DROPBOX_FOLDER or "").rstrip("/")
+    async def _upload(self, path: str, filename: str, subfolders: list[str]) -> None:
+        # Dropbox creates intermediate folders on upload — just build the full path.
+        segments = [config.DROPBOX_FOLDER.strip("/")] if config.DROPBOX_FOLDER else []
+        segments += [s.strip("/") for s in subfolders]
+        segments.append(filename)
+        full_path = "/" + "/".join(s for s in segments if s)
         # Dropbox-API-Arg must be an ASCII header; ensure_ascii escapes any accents.
         arg = json.dumps(
-            {"path": f"{folder}/{filename}", "mode": "overwrite", "mute": True, "autorename": True},
+            {"path": full_path, "mode": "overwrite", "mute": True, "autorename": True},
             ensure_ascii=True,
         )
         async with httpx.AsyncClient(timeout=90) as client:

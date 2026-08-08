@@ -92,6 +92,19 @@ async def drive(session, coro, responses):
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(prefs, "PREFS_FILE", str(tmp_path / "prefs.json"))
+    # Flow tests deliver fake files: build metadata locally (no Open Library call)
+    # and never run the ebook-meta subprocess. Metadata itself is covered in
+    # test_metadata.py, which drives build/enrich/apply directly.
+    from librarian.core import metadata
+
+    async def _prepare(result, hint=None):
+        return metadata.build(result, hint)
+
+    async def _apply(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(metadata, "prepare", _prepare)
+    monkeypatch.setattr(metadata, "apply", _apply)
     saved = list(registry._ALL)
     yield
     registry._ALL[:] = saved
@@ -285,6 +298,26 @@ def test_batch_falls_back_across_editions(monkeypatch):
     ctx = asyncio.run(scenario())
     assert len(ctx.docs) == 1  # delivered via the 2nd edition despite the 1st failing
     assert "1/1" in ctx.messages[-1]
+
+
+def test_multi_choice_select_all_returns_every_value():
+    from librarian.clients.base import ALL, Choice
+
+    async def scenario():
+        s = Session("test:1")
+        ctx = FakeContext(s)
+        task = asyncio.create_task(
+            ctx.ask_multi_choice("pick", [Choice("A", "0"), Choice("B", "1"), Choice("C", "2")])
+        )
+        s.task = task
+        for _ in range(100):
+            await asyncio.sleep(0.005)
+            if s.is_waiting():
+                s.resolve_choice(ALL)
+                break
+        return await task
+
+    assert asyncio.run(scenario()) == ["0", "1", "2"]
 
 
 def test_settings_changes_format():

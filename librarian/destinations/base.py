@@ -13,14 +13,51 @@ from __future__ import annotations
 
 import abc
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from librarian.core import delivery, prefs
 
 if TYPE_CHECKING:
     from librarian.clients.base import ClientContext
+    from librarian.core.metadata import BookMeta
 
 logger = logging.getLogger(__name__)
+
+# --- Cloud folder organisation ---------------------------------------------
+# How cloud destinations file uploaded books into sub-folders. Stored per user as
+# the ``sort_scheme`` pref; the path is built from the book's (clean) metadata.
+SORT_SCHEMES: dict[str, str] = {
+    "author_series": "📂 Auteur / Série",
+    "author": "📂 Par auteur",
+    "series": "📂 Par série",
+    "flat": "📄 Racine (aucun dossier)",
+}
+DEFAULT_SORT_SCHEME = "author_series"
+
+
+def _safe_segment(name: str) -> str:
+    """A filesystem/cloud-safe folder name (drop path separators & control chars)."""
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", name or "").strip().strip(".")
+    return re.sub(r"\s+", " ", cleaned)[:80]
+
+
+def subfolders(scheme: str, meta: BookMeta) -> list[str]:
+    """The ordered sub-folder segments for a book under the destination root."""
+    author = _safe_segment(getattr(meta, "author", "")) or "Sans auteur"
+    series = _safe_segment(getattr(meta, "series", ""))
+    if scheme == "author":
+        return [author]
+    if scheme == "series":
+        return [series] if series else []
+    if scheme == "author_series":
+        return [author, series] if series else [author]
+    return []  # flat
+
+
+async def sort_scheme_for(ctx: ClientContext) -> str:
+    scheme = (await prefs.get(ctx.user_key)).get("sort_scheme", DEFAULT_SORT_SCHEME)
+    return scheme if scheme in SORT_SCHEMES else DEFAULT_SORT_SCHEME
 
 
 class Destination(abc.ABC):
@@ -35,9 +72,14 @@ class Destination(abc.ABC):
         return True
 
     @abc.abstractmethod
-    async def deliver(self, ctx: ClientContext, path: str, filename: str, title: str, caption: str) -> None:
+    async def deliver(
+        self, ctx: ClientContext, path: str, filename: str, title: str, caption: str,
+        meta: BookMeta | None = None,
+    ) -> None:
         """Send ``path`` to the user. ``caption`` is a short suffix (e.g. a VirusTotal
-        warning) to append where relevant. Handle expected errors and message the user."""
+        warning) to append where relevant. ``meta`` carries the book's clean metadata
+        (author/series/number) so folder-organising destinations can file it; plain
+        destinations ignore it. Handle expected errors and message the user."""
 
 
 class MailDestination(Destination):
@@ -50,7 +92,10 @@ class MailDestination(Destination):
     async def available(self, ctx: ClientContext) -> bool:
         return delivery.is_configured() and bool((await prefs.get(ctx.user_key)).get(self.pref_key))
 
-    async def deliver(self, ctx: ClientContext, path: str, filename: str, title: str, caption: str) -> None:
+    async def deliver(
+        self, ctx: ClientContext, path: str, filename: str, title: str, caption: str,
+        meta: BookMeta | None = None,
+    ) -> None:
         addr = (await prefs.get(ctx.user_key)).get(self.pref_key)
         if not addr:
             await ctx.say(f"❌ Adresse {self.channel} non configurée. Utilise /settings")
@@ -74,15 +119,21 @@ class CloudUploadDestination(Destination):
 
     where: str = "le cloud"  # human label used in status messages
 
-    async def deliver(self, ctx: ClientContext, path: str, filename: str, title: str, caption: str) -> None:
+    async def deliver(
+        self, ctx: ClientContext, path: str, filename: str, title: str, caption: str,
+        meta: BookMeta | None = None,
+    ) -> None:
+        folders = subfolders(await sort_scheme_for(ctx), meta) if meta is not None else []
         try:
             await ctx.say(f"☁️ Envoi vers {self.where}…")
-            await self._upload(path, filename)
-            await ctx.say(f"✅ Déposé sur {self.where} — synchronise ta liseuse 📖")
+            await self._upload(path, filename, folders)
+            where = f"{self.where}/{'/'.join(folders)}" if folders else self.where
+            await ctx.say(f"✅ Déposé sur {where} — synchronise ta liseuse 📖")
         except Exception as e:
             logger.warning(f"{self.name} upload failed: {e}")
             await ctx.say(f"❌ Envoi vers {self.where} échoué. Vérifie la configuration.")
 
     @abc.abstractmethod
-    async def _upload(self, path: str, filename: str) -> None:
-        """Upload the file to the provider. Raise on failure."""
+    async def _upload(self, path: str, filename: str, subfolders: list[str]) -> None:
+        """Upload the file to the provider under ``subfolders`` (created as needed).
+        ``subfolders`` empty = the destination root. Raise on failure."""

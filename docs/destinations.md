@@ -21,6 +21,26 @@ one's `deliver()`.
 The chat destination uses the active client's file-size limit — see
 [client limits](clients/README.md#per-platform-upload-limits). Email/Kindle are platform-neutral.
 
+## Cloud folder organisation
+
+Cloud destinations (Dropbox, Google Drive) file each book into sub-folders derived from its
+[clean metadata](intelligence.md) (author/series), chosen per user in `/settings` → **Rangement
+cloud** (the `sort_scheme` pref):
+
+| Scheme | Layout |
+|---|---|
+| `author_series` (default) | `Auteur/Série/01 - Titre.epub` |
+| `author` | `Auteur/Titre.epub` |
+| `series` | `Série/Titre.epub` (standalone books at the root) |
+| `flat` | everything at the root (original behaviour) |
+
+`CloudUploadDestination` computes the segments (`base.subfolders`), then the provider files the
+book: **Dropbox** just uploads to the full path (folders auto-created); **Google Drive** resolves
+or creates each folder id (cached per run) and sets it as the parent. Volumes in a series are
+prefixed with their number (`01 - …`) so they sort in reading order. The sort option only appears
+once a cloud destination is configured. Re-sorting an existing folder after a scheme change is a
+planned on-demand action (not automatic).
+
 ## The contract: `Destination`
 
 Defined in [`librarian/destinations/base.py`](../librarian/destinations/base.py).
@@ -30,7 +50,7 @@ Defined in [`librarian/destinations/base.py`](../librarian/destinations/base.py)
 | `name` | Unique registry name (also the menu choice value). |
 | `label` | Button label shown to the user. |
 | `available(ctx) -> bool` | Whether it can be offered to this user now (default `True`). |
-| `deliver(ctx, path, filename, title, caption)` | Send the file. Owns its status messages and error handling. |
+| `deliver(ctx, path, filename, title, caption, meta=None)` | Send the file. `meta` is the book's clean metadata (author/series) for folder-organising destinations; plain ones ignore it. Owns its status messages and error handling. |
 
 `MailDestination` in the same file is a reusable base for SMTP-backed destinations
 (email, Kindle differ only by stored-address key, `convert` flag, and wording).

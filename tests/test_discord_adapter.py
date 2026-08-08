@@ -28,7 +28,9 @@ def test_multiselect_view_is_a_native_multi_select():
     assert len(selects) == 1
     assert selects[0].min_values == 1 and selects[0].max_values == 4  # pick several
     assert len(selects[0].options) == 4
-    assert buttons and buttons[0].custom_id == CANCEL
+    ids = {b.custom_id for b in buttons}
+    assert "__all__" in ids  # one-tap select-all for long series
+    assert CANCEL in ids
 
 
 def test_flowview_maps_choices_to_button_custom_ids():

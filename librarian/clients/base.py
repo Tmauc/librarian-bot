@@ -27,6 +27,7 @@ from typing import Any
 CANCEL = "__cancel__"
 SKIP = "__skip__"
 DONE = "__done__"
+ALL = "__all__"
 
 
 @dataclass
@@ -199,7 +200,11 @@ class ClientContext(abc.ABC):
         selected: list[str] = []
         remaining = list(choices)
         while remaining:
-            v = await self.ask_choice(prompt, [*remaining, Choice("✅ Terminer la sélection", DONE)], cancellable)
+            controls = [Choice("✅ Tout sélectionner", ALL), Choice("✅ Terminer la sélection", DONE)]
+            v = await self.ask_choice(prompt, [*remaining, *controls], cancellable)
+            if v == ALL:
+                selected.extend(c.value for c in remaining)
+                break
             if v == DONE:
                 break
             selected.append(v)

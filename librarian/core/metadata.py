@@ -132,10 +132,15 @@ async def enrich(meta: BookMeta) -> BookMeta:
     return meta
 
 
+async def prepare(result, hint: BookMeta | None = None) -> BookMeta:
+    """Build + enrich a BookMeta (no writing). The caller reuses it both to tag the
+    file (``apply``) and to file it into folders (destinations)."""
+    return await enrich(build(result, hint))
+
+
 async def tag(path: str, ext: str, result, hint: BookMeta | None = None) -> bool:
     """Build + enrich + write metadata into ``path`` in place. Best-effort → applied?"""
-    meta = await enrich(build(result, hint))
-    return await apply(path, ext, meta)
+    return await apply(path, ext, await prepare(result, hint))
 
 
 async def apply(path: str, ext: str, meta: BookMeta) -> bool:

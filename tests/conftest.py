@@ -27,17 +27,6 @@ for _key in (
     os.environ.setdefault(_key, "")
 
 
-@pytest.fixture(autouse=True)
-def _no_real_metadata_tagging(monkeypatch):
-    """Flow tests deliver fake files; never tag them for real (no network / no
-    ``ebook-meta`` subprocess). Metadata behaviour is covered in test_metadata.py,
-    which exercises build/enrich/apply directly."""
-    async def _noop(*args, **kwargs):
-        return False
-
-    monkeypatch.setattr("librarian.core.metadata.tag", _noop)
-
-
 def build_minimal_epub(path: str) -> str:
     """Write a small but structurally valid EPUB to ``path`` and return it."""
     with zipfile.ZipFile(path, "w") as z:

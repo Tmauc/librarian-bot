@@ -139,6 +139,12 @@ class _MultiSelectView(discord.ui.View):
             select.add_option(label=c.label[:100], value=c.value[:100], description=(c.description[:100] or None))
         select.callback = self._select_cb(client)
         self.add_item(select)
+        # One-tap "select all" — handy for a long series (values capped at the 25 shown).
+        all_btn = discord.ui.Button(
+            label="✅ Tout sélectionner", custom_id="__all__", style=discord.ButtonStyle.primary, row=1
+        )
+        all_btn.callback = self._all_cb(client, [c.value for c in choices[:25]])
+        self.add_item(all_btn)
         if cancellable:
             btn = discord.ui.Button(label="⛔ Annuler", custom_id=CANCEL, style=discord.ButtonStyle.danger, row=1)
             btn.callback = self._cancel_cb(client)
@@ -148,6 +154,13 @@ class _MultiSelectView(discord.ui.View):
     def _select_cb(client: DiscordClient):
         async def _cb(interaction: discord.Interaction) -> None:
             await client._on_multi(interaction, interaction.data["values"])
+
+        return _cb
+
+    @staticmethod
+    def _all_cb(client: DiscordClient, values: list[str]):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await client._on_multi(interaction, values)
 
         return _cb
 
