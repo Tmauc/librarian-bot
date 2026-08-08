@@ -7,6 +7,7 @@ flow an adapter would drive is exercised here through a test-double ClientContex
 import asyncio
 import os
 import tempfile
+import zipfile
 
 import pytest
 
@@ -16,6 +17,14 @@ from librarian.core import prefs
 from librarian.core.models import SearchResult
 from librarian.sources import registry
 from librarian.sources.base import Source
+
+
+def _write_epub(path: str) -> str:
+    """Write a minimal but real EPUB (a ZIP) so flow's content check accepts it."""
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("OEBPS/c.xhtml", "<html><body>x</body></html>")
+    return path
 
 
 class FakeContext(ClientContext):
@@ -64,8 +73,7 @@ class StubSource(Source):
 
     async def download(self, result, on_progress=None, max_bytes=0):
         path = tempfile.mktemp(suffix=f".{result.ext}", prefix="librarian_")
-        with open(path, "wb") as f:
-            f.write(b"x" * 5000)
+        _write_epub(path)
         if on_progress:
             await on_progress(5000, 5000)
         return path
@@ -141,7 +149,7 @@ def test_search_downloads_and_delivers_document():
         return ctx
 
     ctx = asyncio.run(scenario())
-    assert ctx.docs == [("Dune Herbert.epub", 5000)]
+    assert [d[0] for d in ctx.docs] == ["Dune Herbert.epub"]
     assert "Envoyé" in ctx.messages[-1]
 
 
@@ -166,6 +174,24 @@ def test_single_search_groups_editions_and_offers_choice():
     assert len(ctx.docs) == 1
     assert any("2 livre(s)" in m for m in ctx.messages)   # 3 results → 2 books listed
     assert any("2 éditions" in m for m in ctx.messages)   # edition chooser was shown
+
+
+def test_looks_like_epub_rejects_disguised_files(tmp_path):
+    from librarian.clients.flow import _looks_like_epub
+
+    assert _looks_like_epub(_write_epub(str(tmp_path / "real.epub")))
+    for name, magic in [("a.epub", b"%PDF-1.5\n..."),                       # PDF
+                        ("b.epub", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1xx"),   # .doc / OLE2
+                        ("c.epub", b"{\\rtf1\\ansi")]:                       # RTF
+        p = tmp_path / name
+        p.write_bytes(magic)
+        assert not _looks_like_epub(str(p)), name
+
+
+def test_in_display_order_follows_choice_index():
+    from librarian.clients.flow import _in_display_order
+
+    assert _in_display_order({"2", "0", "10", "1"}) == ["0", "1", "2", "10"]  # numeric, not set-order
 
 
 def test_no_results_message():
@@ -311,8 +337,7 @@ def test_batch_series_from_wikidata(monkeypatch):
 
         async def download(self, result, on_progress=None, max_bytes=0):
             path = tempfile.mktemp(suffix=".epub", prefix="librarian_")
-            with open(path, "wb") as f:
-                f.write(b"x" * 5000)
+            _write_epub(path)
             return path
 
     async def scenario():
@@ -357,8 +382,7 @@ def test_batch_falls_back_across_editions(monkeypatch):
             if result.ref.get("md5") == "dead":
                 raise RuntimeError("All mirrors failed for md5=dead")
             path = tempfile.mktemp(suffix=".epub", prefix="librarian_")
-            with open(path, "wb") as f:
-                f.write(b"x" * 5000)
+            _write_epub(path)
             return path
 
     async def scenario():

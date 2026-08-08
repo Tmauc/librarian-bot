@@ -13,6 +13,7 @@ import os
 import re
 import tempfile
 import time
+import zipfile
 from collections import Counter
 
 from librarian import config
@@ -408,10 +409,10 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
         # One canonical author for the whole series (editions disagree — translators,
         # name order) so every tome is tagged identically and lands in ONE folder.
         series_author = _dominant_author(entries)
-        # Each pick keeps its candidate editions (download can fall back) + a metadata
-        # hint (canonical author/series/number/title) for uniform tagging.
+        # Download in the ORDER SHOWN (tome order) — the multi-select may hand back the
+        # picks unordered (a set), which made downloads look random.
         chosen = []
-        for v in picked:
+        for v in _in_display_order(picked):
             num, title, cands = entries[int(v)]
             hint = BookMeta(title=title, author=series_author, series=plan.query, index=num, language=plan.language)
             chosen.append((_vol_label(num, title), cands, hint))
@@ -425,7 +426,7 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
         picked = await ctx.ask_multi_choice(card, [_result_choice(i, results[i]) for i in range(len(results))])
         chosen = [
             (results[int(v)].title or "livre", [results[int(v)]], BookMeta(language=plan.language))
-            for v in picked
+            for v in _in_display_order(picked)
         ]
 
     if not chosen:
@@ -435,6 +436,12 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
     destination = await _pick_destination(ctx)
     desired_fmt = plan.desired_format if plan.desired_format in config.ALLOWED_FORMATS else config.ALLOWED_FORMATS[0]
     await _run_batch_downloads(ctx, plan.query, chosen, desired_fmt, destination)
+
+
+def _in_display_order(picked) -> list:
+    """Order the multi-select picks by their numeric choice value = the order shown
+    (tome order). Non-numeric values keep a stable position at the end."""
+    return sorted(picked, key=lambda v: (0, int(v)) if str(v).lstrip("-").isdigit() else (1, str(v)))
 
 
 async def _run_batch_downloads(ctx: ClientContext, series_name: str, chosen, desired_fmt, destination) -> None:
@@ -852,9 +859,33 @@ async def _fetch_with_retry(ctx: ClientContext, results, start_idx: int, desired
                 os.remove(path)
             continue
 
+        # Verify the actual CONTENT, not just the claimed extension: some catalogue
+        # results have no parsed ext (→ default "epub") and hand back a PDF/MOBI. An EPUB
+        # is a ZIP; a PDF/MOBI is not — reject a mismatch and fall through to the next.
+        if desired_fmt == "epub" and not _looks_like_epub(path):
+            logger.info(f"Result {i} is not a real EPUB, skipping")
+            with contextlib.suppress(Exception):
+                os.remove(path)
+            any_mirror_failure = True
+            continue
+
         return path, result
 
     return "mirrors" if any_mirror_failure else None
+
+
+def _looks_like_epub(path: str) -> bool:
+    """True if ``path`` is really an EPUB (a ZIP whose mimetype, if present, is epub).
+    Catches PDF/MOBI/AZW3 files served under an .epub name."""
+    try:
+        if not zipfile.is_zipfile(path):
+            return False
+        with zipfile.ZipFile(path) as z:
+            if "mimetype" in z.namelist():
+                return z.read("mimetype").strip() == b"application/epub+zip"
+        return True  # a valid zip without an explicit mimetype — accept
+    except Exception:
+        return False
 
 
 async def _download_one(ctx: ClientContext, result) -> str:
