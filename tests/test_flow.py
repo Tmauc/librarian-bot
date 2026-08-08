@@ -180,9 +180,15 @@ def test_looks_like_epub_rejects_disguised_files(tmp_path):
     from librarian.clients.flow import _looks_like_epub
 
     assert _looks_like_epub(_write_epub(str(tmp_path / "real.epub")))
-    for name, magic in [("a.epub", b"%PDF-1.5\n..."),                       # PDF
-                        ("b.epub", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1xx"),   # .doc / OLE2
-                        ("c.epub", b"{\\rtf1\\ansi")]:                       # RTF
+    cases = [
+        ("a.epub", b"%PDF-1.5\n..."),                                        # PDF
+        ("b.epub", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1xx"),                    # .doc / OLE2
+        ("c.epub", b"{\\rtf1\\ansi"),                                        # RTF
+        # A .doc that ALSO contains a ZIP end-of-central-directory signature: this fools
+        # zipfile.is_zipfile (the real 1.7 MB bug), but not the leading-bytes check.
+        ("d.epub", b"\xd0\xcf\x11\xe0" + b"x" * 64 + b"PK\x05\x06" + b"\x00" * 18),
+    ]
+    for name, magic in cases:
         p = tmp_path / name
         p.write_bytes(magic)
         assert not _looks_like_epub(str(p)), name

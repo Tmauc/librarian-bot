@@ -875,11 +875,18 @@ async def _fetch_with_retry(ctx: ClientContext, results, start_idx: int, desired
 
 
 def _looks_like_epub(path: str) -> bool:
-    """True if ``path`` is really an EPUB (a ZIP whose mimetype, if present, is epub).
-    Catches PDF/MOBI/AZW3 files served under an .epub name."""
+    """True if ``path`` is really an EPUB. Catches PDF/MOBI/AZW3/DOC/RTF files served
+    under an .epub name.
+
+    NOTE: ``zipfile.is_zipfile`` is NOT enough — it scans the whole file for a ZIP
+    end-of-central-directory signature, which a large .doc (OLE2) can contain by chance
+    (real bug: a 1.7 MB .doc passed it). An EPUB's OCF ZIP MUST start with the local file
+    header ``PK\\x03\\x04``; .doc starts ``\\xd0\\xcf\\x11\\xe0``, .rtf ``{\\rtf``, .pdf
+    ``%PDF`` — so we check the leading bytes first."""
     try:
-        if not zipfile.is_zipfile(path):
-            return False
+        with open(path, "rb") as f:
+            if f.read(4) != b"PK\x03\x04":
+                return False
         with zipfile.ZipFile(path) as z:
             if "mimetype" in z.namelist():
                 return z.read("mimetype").strip() == b"application/epub+zip"
