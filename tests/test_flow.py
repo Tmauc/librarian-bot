@@ -240,6 +240,53 @@ def test_batch_series_from_wikidata(monkeypatch):
     assert len(ctx.docs) == 2  # both matched volumes downloaded
 
 
+def test_batch_falls_back_across_editions(monkeypatch):
+    """A tome whose first edition's mirrors are dead falls back to the next edition
+    instead of failing — the fix for the frequent 'sources indisponibles' in batch."""
+    from librarian.core import planner, series
+    from librarian.core.models import Plan, SearchResult
+
+    async def fake_plan(request):
+        return Plan(query="Ma série", series=True, desired_format="epub")
+
+    async def fake_vols(name, language="fr"):
+        return [(1, "Alpha")]
+
+    class FlakySource(Source):
+        name = "stub"
+
+        async def search(self, query):
+            if "Alpha" in query:  # two editions of the same volume
+                return [
+                    SearchResult("stub", "Ma série Alpha ed1", "epub", ref={"md5": "dead"}),
+                    SearchResult("stub", "Ma série Alpha ed2", "epub", ref={"md5": "ok"}),
+                ]
+            return []
+
+        async def download(self, result, on_progress=None, max_bytes=0):
+            if result.ref.get("md5") == "dead":
+                raise RuntimeError("All mirrors failed for md5=dead")
+            path = tempfile.mktemp(suffix=".epub", prefix="librarian_")
+            with open(path, "wb") as f:
+                f.write(b"x" * 5000)
+            return path
+
+    async def scenario():
+        registry._ALL[:] = [FlakySource()]
+        monkeypatch.setattr(planner, "enabled", lambda: True)
+        monkeypatch.setattr(planner, "plan", fake_plan)
+        monkeypatch.setattr(series, "volumes", fake_vols)
+        await prefs.set("test:1", "format", "epub")
+        s = Session("test:1")
+        ctx = FakeContext(s)
+        await drive(s, flow.run_search(ctx, "l'intégrale de ma série"), [("choice", "0")])
+        return ctx
+
+    ctx = asyncio.run(scenario())
+    assert len(ctx.docs) == 1  # delivered via the 2nd edition despite the 1st failing
+    assert "1/1" in ctx.messages[-1]
+
+
 def test_settings_changes_format():
     async def scenario():
         await prefs.set("test:1", "format", "epub")

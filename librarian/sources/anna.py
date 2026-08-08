@@ -18,6 +18,15 @@ logger = logging.getLogger(__name__)
 _MD5_RE = re.compile(r"^[a-f0-9]{32}$")
 MAX_HTML_SIZE = 5 * 1024 * 1024  # 5 MB max for intermediate HTML pages
 
+# Mirrors that reliably waste our time (blocked in FR → 75s connect timeout, or
+# always-503 / captcha-gated): keep them, but try them LAST. See _get_download_links.
+_DEPRIORITIZE = ("libgen.is", "z-library", "z-lib", "1lib", "libgen.rs")
+
+
+def _link_rank(url: str) -> int:
+    u = url.lower()
+    return 1 if any(bad in u for bad in _DEPRIORITIZE) else 0
+
 
 def _validate_md5(md5: str) -> bool:
     return bool(_MD5_RE.match(md5))
@@ -155,7 +164,9 @@ class AnnaArchiveSource(Source):
     def _client(self, timeout: int) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             headers=BROWSER_HEADERS,
-            timeout=timeout,
+            # Cap the CONNECT phase hard: a dead/blocked mirror (e.g. libgen.is in FR)
+            # otherwise hangs ~75s exhausting every A-record before we move on.
+            timeout=httpx.Timeout(timeout, connect=8),
             follow_redirects=True,
             event_hooks={"response": [self._check_redirect]},
         )
@@ -269,6 +280,9 @@ class AnnaArchiveSource(Source):
                         links.append(href)
                 elif href.startswith("http") and md5.lower() in href.lower() and _is_safe_url(href):
                     links.append(href)
+            # Try good mirrors first, known-slow ones last (stable sort keeps DOM order
+            # within each rank); Anna's captcha-gated slow_download is the last resort.
+            links.sort(key=_link_rank)
             links.append(f"{self.base_url}/slow_download/{md5}/0/0")
             logger.info(f"Found {len(links)} download links for md5={md5}")
             return links

@@ -47,6 +47,25 @@ def _cancel_btn() -> list[Choice]:
     return [Choice("⛔ Annuler", CANCEL)]
 
 
+class _QuietContext:
+    """A ctx proxy used during batch delivery: silences per-book chatter (``say`` /
+    ``update_status``, including a destination's own status messages) while forwarding
+    everything else — uploads, identity, limits, the session. This lets the batch loop
+    own ONE consolidated live message instead of dozens of interleaved ones."""
+
+    def __init__(self, ctx: ClientContext):
+        self._ctx = ctx
+
+    def __getattr__(self, name):  # forward uploads, user_key, data, max_file_size, session…
+        return getattr(self._ctx, name)
+
+    async def say(self, content) -> None:
+        pass
+
+    async def update_status(self, content, choices=None) -> None:
+        pass
+
+
 # ===========================================================================
 # Entry points (called by an adapter)
 # ===========================================================================
@@ -235,15 +254,19 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
     vols = await series.volumes(plan.query, plan.language or "fr")
     entries = await _series_entries(ctx, plan, vols) if vols else []
 
-    if entries:  # clean, ordered "Tome N — title" → real file
-        choices = [Choice(_vol_label(n, t), str(i), description=_meta_line(r)) for i, (n, t, r) in enumerate(entries)]
+    if entries:  # clean, ordered "Tome N — title" → several candidate editions
+        choices = [
+            Choice(_vol_label(n, t), str(i), description=_meta_line(cands[0]))
+            for i, (n, t, cands) in enumerate(entries)
+        ]
         card = Card(
             title=f"🧠 {plan.query}",
             description=f"{len(entries)} tome(s) trouvé(s) — coche ceux à télécharger :",
             footer="Série identifiée via Wikidata + catalogue",
         )
         picked = await ctx.ask_multi_choice(card, choices)
-        chosen = [entries[int(v)][2] for v in picked]
+        # Each pick keeps its list of candidate editions → download can fall back.
+        chosen = [(_vol_label(*entries[int(v)][:2]), entries[int(v)][2]) for v in picked]
     else:  # fallback: unknown series → raw catalogue, user sorts it out
         await ctx.say(f"🔎 Recherche de « {plan.query} »…")
         results = await search_service.search(plan.query, ctx.max_file_size)
@@ -252,7 +275,7 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
             return
         card = Card(title=f"🧠 {plan.query}", description="Coche les tomes à télécharger :", footer=f"{len(results)} résultat(s)")
         picked = await ctx.ask_multi_choice(card, [_result_choice(i, results[i]) for i in range(len(results))])
-        chosen = [results[int(v)] for v in picked]
+        chosen = [(results[int(v)].title or "livre", [results[int(v)]]) for v in picked]
 
     if not chosen:
         await ctx.say("🔍 Aucun tome sélectionné. À bientôt !")
@@ -260,18 +283,45 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
 
     destination = await _pick_destination(ctx)
     desired_fmt = plan.desired_format if plan.desired_format in config.ALLOWED_FORMATS else config.ALLOWED_FORMATS[0]
-    done = 0
-    for r in chosen:
-        await ctx.say(f"📖 {r.title[:60]}")
-        await _deliver(ctx, [r], 0, desired_fmt, destination)
-        done += 1
-    await ctx.say(f"✅ Terminé — {done} livre(s) livré(s).")
+    await _run_batch_downloads(ctx, plan.query, chosen, desired_fmt, destination)
+
+
+async def _run_batch_downloads(ctx: ClientContext, series_name: str, chosen, desired_fmt, destination) -> None:
+    """Download every chosen tome under ONE live message: a global progress bar + a
+    per-tome checklist that fills in as each finishes. Each tome carries several
+    candidate editions so a dead mirror falls back instead of failing the tome."""
+    total = len(chosen)
+    log: list[tuple[bool, str]] = []  # (delivered?, label) in order
+    quiet = _QuietContext(ctx)
+    for label, candidates in chosen:
+        await ctx.update_status(_batch_card(series_name, log, current=label, total=total), _cancel_btn())
+        ok = await _deliver(quiet, candidates, 0, desired_fmt, destination)
+        log.append((ok, label))
+    # Final frame of the live message (no "in progress" line, no cancel button)…
+    await ctx.update_status(_batch_card(series_name, log, current=None, total=total))
+    delivered = sum(1 for ok, _ in log if ok)
+    tail = "" if delivered == total else "\nRéessaie les tomes ❌ dans quelques minutes — mirrors momentanément indispo."
+    await ctx.say(f"✅ Terminé — {delivered}/{total} tome(s) livré(s).{tail}")
+
+
+def _batch_card(series_name: str, log: list[tuple[bool, str]], current: str | None, total: int) -> Card:
+    """The single evolving batch message: global bar + ✅/❌ checklist + current tome."""
+    done = len(log)
+    pct = int(done / total * 100) if total else 0
+    lines = [f"{'✅' if ok else '❌'} {label[:70]}" for ok, label in log]
+    if current is not None:
+        lines.append(f"⏳ {current[:70]}…")
+    return Card(
+        title=f"🧠 {series_name}",
+        description=f"{_progress_bar(pct)}  {done}/{total} tome(s)\n\n" + "\n".join(lines),
+        footer="Téléchargement de la série…" if current is not None else "Série téléchargée",
+    )
 
 
 async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
-    """Map each canonical volume to the best catalogue file (preferring the requested
-    language), then backfill any numbered tome the catalogue has but Wikidata missed.
-    Returns ordered ``(number, title, result)`` tuples."""
+    """Map each canonical volume to its best catalogue candidates (several editions,
+    preferring the requested language), then backfill any numbered tome the catalogue
+    has but Wikidata missed. Returns ordered ``(number, title, [results])`` tuples."""
     lang = plan.language
     searches = await asyncio.gather(
         *[search_service.search(f"{plan.query} {title}", ctx.max_file_size) for _, title in vols]
@@ -279,9 +329,9 @@ async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
     entries: list[tuple] = []
     covered: set[int] = set()
     for (num, title), results in zip(vols, searches, strict=True):
-        r = _best_match(title, results, lang)
-        if r:
-            entries.append((num, title, r))
+        cands = _best_matches(title, results, lang)
+        if cands:
+            entries.append((num, title, cands))
             if num is not None:
                 covered.add(num)
 
@@ -292,24 +342,23 @@ async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
         num = _detect_tome(r.title)
         if num is not None and num not in covered:
             covered.add(num)
-            entries.append((num, r.title, r))
+            entries.append((num, r.title, [r]))
 
     entries.sort(key=lambda e: (e[0] is None, e[0] if e[0] is not None else 0))
     return entries
 
 
-def _best_match(vol: str, results, language: str = ""):
-    """Top result sharing a distinctive word with the volume title, preferring the
-    requested language; None if nothing plausible."""
+def _best_matches(vol: str, results, language: str = "", limit: int = 5):
+    """Up to ``limit`` results sharing a distinctive word with the volume title, the
+    requested language first — several candidate editions so download can fall back
+    when a mirror is dead. Empty if nothing plausible."""
     words = {w for w in re.sub(r"[^\w]", " ", vol.lower()).split() if len(w) > 3}
-    matches = [r for r in results[:8] if not words or any(w in r.title.lower() for w in words)]
-    if not matches:
-        return None
+    matches = [r for r in results[:12] if not words or any(w in r.title.lower() for w in words)]
     if language:
         preferred = [r for r in matches if r.language and _lang_match(r.language, language)]
-        if preferred:
-            return preferred[0]
-    return matches[0]
+        rest = [r for r in matches if r not in preferred]
+        matches = preferred + rest
+    return matches[:limit]
 
 
 # ===========================================================================
@@ -416,20 +465,25 @@ async def _ask_optional_email(ctx: ClientContext, prompt: str) -> str | None:
         await ctx.say("❌ Adresse invalide. Réessaie, ou clique Passer.")
 
 
-async def _deliver(ctx: ClientContext, results, start_idx: int, desired_fmt: str, destination: Destination) -> None:
+async def _deliver(ctx: ClientContext, results, start_idx: int, desired_fmt: str, destination: Destination) -> bool:
+    """Fetch → convert → scan → deliver one book. Returns True if delivered.
+
+    In batch mode the caller wraps ``ctx`` in a ``_QuietContext`` so all the
+    per-book chatter is silenced and only the bool result drives the global view.
+    """
     file_path = None
     converted_path = None
     try:
         outcome = await _fetch_with_retry(ctx, results, start_idx, desired_fmt)
         if outcome is None:
             await ctx.say("😕 Aucun résultat disponible dans la limite de taille.\nRefais une recherche.")
-            return
+            return False
         if outcome == "mirrors":
             await ctx.say(
                 "😕 Toutes les sources de téléchargement sont indisponibles pour l'instant.\n"
                 "Réessaie dans quelques minutes ou essaie un autre titre."
             )
-            return
+            return False
 
         file_path, result = outcome
         title = result.title or "livre"
@@ -454,12 +508,13 @@ async def _deliver(ctx: ClientContext, results, start_idx: int, desired_fmt: str
 
         vt_caption = await _scan(ctx, send_path, title)
         if vt_caption is None:  # blocked as malicious
-            return
+            return False
 
         safe_title = re.sub(r"[^\w\s\-]", "", title).strip()[:60] or "livre"
         filename = f"{safe_title}.{send_ext}"
 
         await destination.deliver(ctx, send_path, filename, title, vt_caption)
+        return True
     finally:
         for p in (file_path, converted_path):
             if p and p.startswith(tempfile.gettempdir()):
