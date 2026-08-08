@@ -102,7 +102,7 @@ def _compose_title(vol_title: str, series: str, index: int | None) -> str:
     vol = (vol_title or "").strip()
     if not series:
         return vol
-    tag = f"{series} - T{index}" if index is not None else series
+    tag = f"{series} - T{index:02d}" if index is not None else series  # zero-padded → T01, T02…
     if vol and vol.lower() != series.lower():
         return f"{tag} : {vol}"
     return tag

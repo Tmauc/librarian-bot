@@ -31,7 +31,7 @@ def test_build_composes_series_title_and_prefers_hint_author():
     hint = BookMeta(title="Le Feu dans le ciel", author="Anne Robillard",
                     series="Les Chevaliers d'Émeraude", index=1, language="fr")
     m = metadata.build(r, hint)
-    assert m.title == "Les Chevaliers d'Émeraude - T1 : Le Feu dans le ciel"  # canonical format
+    assert m.title == "Les Chevaliers d'Émeraude - T01 : Le Feu dans le ciel"  # canonical format
     assert m.author == "Anne Robillard"                # hint (series-wide) author wins
     assert m.series == "Les Chevaliers d'Émeraude" and m.index == 1
     assert m.language == "fr" and m.year == "2003"
@@ -39,8 +39,9 @@ def test_build_composes_series_title_and_prefers_hint_author():
 
 def test_compose_title_variants():
     from librarian.core.metadata import _compose_title
-    assert _compose_title("Le Feu", "Chevaliers", 1) == "Chevaliers - T1 : Le Feu"
-    assert _compose_title("Hunger Games", "Hunger Games", 1) == "Hunger Games - T1"  # no redundant tail
+    assert _compose_title("Le Feu", "Chevaliers", 1) == "Chevaliers - T01 : Le Feu"
+    assert _compose_title("Hunger Games", "Hunger Games", 1) == "Hunger Games - T01"  # no redundant tail
+    assert _compose_title("Irianeth", "Chevaliers", 12) == "Chevaliers - T12 : Irianeth"  # 2-digit stays
     assert _compose_title("Dune", "", None) == "Dune"                                # standalone
 
 
