@@ -432,9 +432,9 @@ def test_best_matches_edition_preference_breaks_ties():
     small = SearchResult("s", "Hunger Games, tome 1", "epub", language="Français", size_bytes=300_000, year="2011")
     big = SearchResult("s", "Hunger Games, tome 1", "epub", language="Français", size_bytes=1_300_000, year="2015")
     # quality → biggest file; light → smallest; recent → newest year
-    assert _best_matches("Hunger Games", 1, [small, big], "fr", "epub", "quality")[0] is big
-    assert _best_matches("Hunger Games", 1, [big, small], "fr", "epub", "light")[0] is small
-    assert _best_matches("Hunger Games", 1, [small, big], "fr", "epub", "recent")[0] is big
+    assert _best_matches("Hunger Games", 1, [small, big], "fr", "epub", edition="quality")[0] is big
+    assert _best_matches("Hunger Games", 1, [big, small], "fr", "epub", edition="light")[0] is small
+    assert _best_matches("Hunger Games", 1, [small, big], "fr", "epub", edition="recent")[0] is big
 
 
 def test_settings_changes_edition_preference():

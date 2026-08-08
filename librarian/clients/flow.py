@@ -289,6 +289,9 @@ async def run_search(ctx: ClientContext, query: str) -> None:
         elif _looks_like_batch(p.query):  # small model left the keyword in → scrub it
             p.query = _clean_series_query(p.query) or p.query
             logger.info(f"Scrubbed LLM query → {p.query!r}")
+        # Language detection is trivial and reliable — never trust the LLM to have caught
+        # « en vf »; fill it in deterministically so the French filter always applies.
+        p.language = p.language or _detect_language(query)
         await _run_batch(ctx, p)
         return
 
@@ -472,31 +475,48 @@ async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
     has but Wikidata missed. Returns ordered ``(number, title, [results])`` tuples."""
     lang = plan.language
     fmt = plan.desired_format if plan.desired_format in config.ALLOWED_FORMATS else config.ALLOWED_FORMATS[0]
+    author = plan.author
     edition = (await prefs.get(ctx.user_key)).get("edition_pref", DEFAULT_EDITION)
     searches = await asyncio.gather(*[_search_volume(ctx, plan.query, num, title) for num, title in vols])
     entries: list[tuple] = []
     covered: set[int] = set()
     for (num, title), results in zip(vols, searches, strict=True):
-        cands = _best_matches(title, num, results, lang, fmt, edition)
+        cands = _best_matches(title, num, results, lang, fmt, author, edition)
         if cands:
             entries.append((num, title, cands))
             if num is not None:
                 covered.add(num)
 
-    # Backfill: numbered tomes present in the catalogue but missing from Wikidata (data gaps).
+    # Backfill numbered tomes the catalogue has but Wikidata missed — but ONLY within the
+    # series' own range (≤ the highest known tome), matching language + format + author, so
+    # a franchise's spin-offs (« The Winds of Dune », prequels) don't sneak in.
+    max_tome = max(covered, default=0)
     for r in await search_service.search(plan.query, ctx.max_file_size):
         if lang and r.language and not _lang_match(r.language, lang):
             continue
-        if fmt and r.ext and r.ext != fmt:  # respect the desired format (e.g. epub only)
+        if fmt and r.ext and r.ext != fmt:
+            continue
+        if not _author_match(r.author, author):
             continue
         num = _detect_tome(r.title)
-        if num is not None and num not in covered:
+        if num is not None and num not in covered and 1 <= num <= max_tome:
             covered.add(num)
             entries.append((num, r.title, [r]))
 
     entries = _dedupe_entries(entries)
     entries.sort(key=lambda e: (e[0] is None, e[0] if e[0] is not None else 0))
     return entries
+
+
+def _author_match(result_author: str, author: str) -> bool:
+    """True if ``result_author`` plausibly is ``author`` — every word of the requested
+    author appears in the result's author (so « Frank Herbert » excludes « Brian Herbert »).
+    Neutral (True) when no author was requested."""
+    words = [w for w in author.lower().split() if len(w) > 1]
+    if not words:
+        return True
+    ra = (result_author or "").lower()
+    return all(w in ra for w in words)
 
 
 def _file_key(r) -> str:
@@ -537,12 +557,12 @@ async def _search_volume(ctx: ClientContext, series_name: str, num: int | None, 
 
 
 def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: str = "",
-                  edition: str = DEFAULT_EDITION, limit: int = 5):
+                  author: str = "", edition: str = DEFAULT_EDITION, limit: int = 5):
     """Up to ``limit`` plausible editions of a volume. A candidate is plausible if it
-    carries the right tome number OR shares a distinctive word with the sub-title. Ranked
-    so the requested language, then format, then an explicit tome-number match come first
-    (e.g. a French EPUB « … tome 1 » before an English EPUB), with the ``edition`` strategy
-    (quality/light/recent) as the final tie-break. Empty if none plausible."""
+    carries the right tome number OR shares a distinctive word with the sub-title. Ranked:
+    the requested AUTHOR first (« Dune » by Frank Herbert before « Avant Dune » by Brian
+    Herbert), then language, format, an explicit tome-number match, and finally the
+    ``edition`` strategy (quality/light/recent). Empty if none plausible."""
     words = {w for w in re.sub(r"[^\w]", " ", vol.lower()).split() if len(w) > 3}
 
     def num_ok(r) -> bool:
@@ -553,10 +573,11 @@ def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: s
 
     matches = [r for r in results if plausible(r)]
 
-    def rank(r) -> tuple[int, int, int, int]:
+    def rank(r) -> tuple[int, int, int, int, int]:
+        author_ok = _author_match(r.author, author)
         lang_ok = bool(language and r.language and _lang_match(r.language, language))
         fmt_ok = bool(fmt and r.ext == fmt)
-        return (int(lang_ok), int(fmt_ok), int(num_ok(r)), _edition_score(r, edition))
+        return (int(author_ok), int(lang_ok), int(fmt_ok), int(num_ok(r)), _edition_score(r, edition))
 
     matches.sort(key=rank, reverse=True)  # stable → keeps catalogue order within a tier
     return matches[:limit]

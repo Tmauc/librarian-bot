@@ -13,6 +13,12 @@ from librarian.sources import registry
 
 logger = logging.getLogger(__name__)
 
+# A batch (« l'intégrale de X ») fans out one search per volume — 17 tomes × 2 queries
+# = 34 at once, which makes Anna return 429 Too Many Requests. Cap how many searches hit
+# the sources concurrently so large series don't get rate-limited.
+_MAX_CONCURRENT_SEARCHES = 4
+_search_sem = asyncio.Semaphore(_MAX_CONCURRENT_SEARCHES)
+
 
 async def _safe_search(source, query: str) -> list[SearchResult]:
     try:
@@ -39,7 +45,8 @@ async def search(query: str, max_file_size: int = 0) -> list[SearchResult]:
     ``max_file_size`` (0 = unlimited) drops results already known to be too big;
     the real size guard still happens post-download since many results report 0.
     """
-    lists = await asyncio.gather(*[_safe_search(s, query) for s in registry.enabled_sources()])
+    async with _search_sem:  # throttle concurrent source hits (avoid Anna 429 on big series)
+        lists = await asyncio.gather(*[_safe_search(s, query) for s in registry.enabled_sources()])
     all_results = [r for lst in lists for r in lst]
 
     direct = [r for r in all_results if not r.is_torrent]
