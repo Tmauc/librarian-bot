@@ -128,48 +128,75 @@ class DiscordContext(ClientContext):
 
 
 class _MultiSelectView(discord.ui.View):
-    """A native multi-select (+ optional Cancel). Resolves with the list of values."""
+    """A native multi-select where picking and validating are SEPARATE steps.
+
+    The dropdown and « ✅ Tout cocher » only update the (pre-)selection — re-rendered
+    with the chosen options ticked — so the user can select all then untick a few. Only
+    « ✔️ Valider » submits the final list. Resolves via ``client._on_multi``."""
 
     def __init__(self, client: DiscordClient, choices: list[Choice], cancellable: bool):
         super().__init__(timeout=None)
+        self._client = client
+        self._choices = choices[:25]
+        self._cancellable = cancellable
+        self._selected: set[str] = set()
+        self._render()
+
+    def _render(self) -> None:
+        self.clear_items()
         select = discord.ui.Select(
-            placeholder="Coche les livres à télécharger…", min_values=1, max_values=min(len(choices), 25)
+            placeholder="Coche les tomes à télécharger…",
+            min_values=0, max_values=len(self._choices) or 1,
         )
-        for c in choices[:25]:
-            select.add_option(label=c.label[:100], value=c.value[:100], description=(c.description[:100] or None))
-        select.callback = self._select_cb(client)
+        for c in self._choices:
+            select.add_option(
+                label=c.label[:100], value=c.value[:100],
+                description=(c.description[:100] or None), default=c.value in self._selected,
+            )
+        select.callback = self._on_select
         self.add_item(select)
-        # One-tap "select all" — handy for a long series (values capped at the 25 shown).
-        all_btn = discord.ui.Button(
-            label="✅ Tout sélectionner", custom_id="__all__", style=discord.ButtonStyle.primary, row=1
-        )
-        all_btn.callback = self._all_cb(client, [c.value for c in choices[:25]])
+        all_btn = discord.ui.Button(label="✅ Tout cocher", style=discord.ButtonStyle.secondary, row=1)
+        all_btn.callback = self._on_all
         self.add_item(all_btn)
-        if cancellable:
-            btn = discord.ui.Button(label="⛔ Annuler", custom_id=CANCEL, style=discord.ButtonStyle.danger, row=1)
-            btn.callback = self._cancel_cb(client)
-            self.add_item(btn)
+        validate = discord.ui.Button(
+            label=f"✔️ Valider ({len(self._selected)})", style=discord.ButtonStyle.success, row=1
+        )
+        validate.callback = self._on_validate
+        self.add_item(validate)
+        if self._cancellable:
+            cancel = discord.ui.Button(label="⛔ Annuler", custom_id=CANCEL, style=discord.ButtonStyle.danger, row=1)
+            cancel.callback = self._on_cancel
+            self.add_item(cancel)
 
-    @staticmethod
-    def _select_cb(client: DiscordClient):
-        async def _cb(interaction: discord.Interaction) -> None:
-            await client._on_multi(interaction, interaction.data["values"])
+    async def _authorized(self, interaction: discord.Interaction) -> bool:
+        if self._client._authorized(interaction.user.id):
+            return True
+        with contextlib.suppress(Exception):
+            await interaction.response.defer()
+        return False
 
-        return _cb
+    async def _refresh(self, interaction: discord.Interaction) -> None:
+        self._render()
+        with contextlib.suppress(Exception):
+            await interaction.response.edit_message(view=self)
 
-    @staticmethod
-    def _all_cb(client: DiscordClient, values: list[str]):
-        async def _cb(interaction: discord.Interaction) -> None:
-            await client._on_multi(interaction, values)
+    async def _on_select(self, interaction: discord.Interaction) -> None:
+        if not await self._authorized(interaction):
+            return
+        self._selected = set(interaction.data.get("values", []))
+        await self._refresh(interaction)
 
-        return _cb
+    async def _on_all(self, interaction: discord.Interaction) -> None:
+        if not await self._authorized(interaction):
+            return
+        self._selected = {c.value for c in self._choices}
+        await self._refresh(interaction)
 
-    @staticmethod
-    def _cancel_cb(client: DiscordClient):
-        async def _cb(interaction: discord.Interaction) -> None:
-            await client._on_button(interaction, CANCEL)
+    async def _on_validate(self, interaction: discord.Interaction) -> None:
+        await self._client._on_multi(interaction, list(self._selected))
 
-        return _cb
+    async def _on_cancel(self, interaction: discord.Interaction) -> None:
+        await self._client._on_button(interaction, CANCEL)
 
 
 class DiscordClient:

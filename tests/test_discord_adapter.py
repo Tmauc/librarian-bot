@@ -26,11 +26,46 @@ def test_multiselect_view_is_a_native_multi_select():
     selects = [c for c in view.children if type(c).__name__ == "Select"]
     buttons = [c for c in view.children if type(c).__name__ == "Button"]
     assert len(selects) == 1
-    assert selects[0].min_values == 1 and selects[0].max_values == 4  # pick several
+    # min_values=0 so the user can untick everything; picking != validating.
+    assert selects[0].min_values == 0 and selects[0].max_values == 4
     assert len(selects[0].options) == 4
-    ids = {b.custom_id for b in buttons}
-    assert "__all__" in ids  # one-tap select-all for long series
-    assert CANCEL in ids
+    labels = [b.label for b in buttons]
+    assert any("Tout cocher" in label for label in labels)   # pre-check all, no submit
+    assert any("Valider" in label for label in labels)       # explicit validate step
+    assert any(b.custom_id == CANCEL for b in buttons)
+
+
+def test_multiselect_select_all_prechecks_without_submitting(monkeypatch):
+    """« Tout cocher » ticks every option (default=True) and re-renders — it must NOT
+    resolve the flow, so the user can still untick a few before validating."""
+    resolved = []
+
+    class _StubClient:
+        @staticmethod
+        def _authorized(uid):
+            return True
+
+        async def _on_multi(self, interaction, values):
+            resolved.append(values)
+
+    class _Resp:
+        async def edit_message(self, **kw):
+            pass
+
+        async def defer(self):
+            pass
+
+    async def run():
+        view = _MultiSelectView(_StubClient(), [Choice(f"Tome {i}", str(i)) for i in range(3)], True)
+        inter = type("I", (), {"user": type("U", (), {"id": 1})(), "response": _Resp(), "data": {}})()
+        await view._on_all(inter)
+        return view
+
+    view = asyncio.run(run())
+    assert view._selected == {"0", "1", "2"}          # all pre-checked
+    assert resolved == []                             # but NOT submitted
+    select = next(c for c in view.children if type(c).__name__ == "Select")
+    assert all(o.default for o in select.options)     # ticks reflected in the dropdown
 
 
 def test_flowview_maps_choices_to_button_custom_ids():
