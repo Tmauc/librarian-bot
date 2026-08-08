@@ -310,10 +310,23 @@ def test_best_matches_prefers_language_then_format():
         SearchResult("s", "Hunger Games", "pdf", language="Français"),
         SearchResult("s", "Hunger Games", "epub", language="Français"),
     ]
-    ranked = _best_matches("Hunger Games", results, language="fr", fmt="epub")
+    ranked = _best_matches("Hunger Games", 1, results, language="fr", fmt="epub")
     # French EPUB first, then French PDF, then the English ones.
     assert (ranked[0].language, ranked[0].ext) == ("Français", "epub")
     assert (ranked[1].language, ranked[1].ext) == ("Français", "pdf")
+
+
+def test_best_matches_uses_tome_number():
+    """A French edition titled by tome number is matched even without the sub-title."""
+    from librarian.clients.flow import _best_matches
+    from librarian.core.models import SearchResult
+
+    results = [
+        SearchResult("s", "Hunger Games - L'Embrasement", "epub", language="English"),
+        SearchResult("s", "Hunger Games, tome 2", "epub", language="Français"),  # no sub-title
+    ]
+    ranked = _best_matches("L'Embrasement", 2, results, language="fr", fmt="epub")
+    assert ranked[0].title == "Hunger Games, tome 2"  # FR + tome-number match wins
 
 
 def test_batch_epub_target_skips_non_epub_candidates():

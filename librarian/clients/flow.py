@@ -390,13 +390,11 @@ async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
     has but Wikidata missed. Returns ordered ``(number, title, [results])`` tuples."""
     lang = plan.language
     fmt = plan.desired_format if plan.desired_format in config.ALLOWED_FORMATS else config.ALLOWED_FORMATS[0]
-    searches = await asyncio.gather(
-        *[search_service.search(f"{plan.query} {title}", ctx.max_file_size) for _, title in vols]
-    )
+    searches = await asyncio.gather(*[_search_volume(ctx, plan.query, num, title) for num, title in vols])
     entries: list[tuple] = []
     covered: set[int] = set()
     for (num, title), results in zip(vols, searches, strict=True):
-        cands = _best_matches(title, results, lang, fmt)
+        cands = _best_matches(title, num, results, lang, fmt)
         if cands:
             entries.append((num, title, cands))
             if num is not None:
@@ -439,17 +437,41 @@ def _dedupe_entries(entries: list[tuple]) -> list[tuple]:
     return out
 
 
-def _best_matches(vol: str, results, language: str = "", fmt: str = "", limit: int = 5):
-    """Up to ``limit`` plausible editions of ``vol``, ranked so the requested language
-    AND format come first (e.g. a French EPUB before an English PDF) — several
-    candidates so download can fall back when a mirror is dead. Empty if none plausible."""
-    words = {w for w in re.sub(r"[^\w]", " ", vol.lower()).split() if len(w) > 3}
-    matches = [r for r in results[:15] if not words or any(w in r.title.lower() for w in words)]
+async def _search_volume(ctx: ClientContext, series_name: str, num: int | None, title: str):
+    """Find a volume's editions in the catalogue. We search BOTH by sub-title and by
+    « série tome N », because French editions are often titled « Série, tome N » rather
+    than by the sub-title (the sub-title query alone returned English for e.g. Hunger
+    Games tome 1). Results are merged and de-duplicated by file."""
+    queries = [f"{series_name} {title}"]
+    if num is not None:
+        queries.append(f"{series_name} tome {num}")
+    lists = await asyncio.gather(*[search_service.search(q, ctx.max_file_size) for q in queries])
+    merged: dict[str, object] = {}
+    for lst in lists:
+        for r in lst:
+            merged.setdefault(_file_key(r), r)
+    return list(merged.values())
 
-    def rank(r) -> tuple[int, int]:
+
+def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: str = "", limit: int = 5):
+    """Up to ``limit`` plausible editions of a volume. A candidate is plausible if it
+    carries the right tome number OR shares a distinctive word with the sub-title. Ranked
+    so the requested language, then format, then an explicit tome-number match come first
+    (e.g. a French EPUB « … tome 1 » before an English EPUB). Empty if none plausible."""
+    words = {w for w in re.sub(r"[^\w]", " ", vol.lower()).split() if len(w) > 3}
+
+    def num_ok(r) -> bool:
+        return num is not None and _detect_tome(r.title) == num
+
+    def plausible(r) -> bool:
+        return num_ok(r) or not words or any(w in r.title.lower() for w in words)
+
+    matches = [r for r in results if plausible(r)]
+
+    def rank(r) -> tuple[int, int, int]:
         lang_ok = bool(language and r.language and _lang_match(r.language, language))
         fmt_ok = bool(fmt and r.ext == fmt)
-        return (int(lang_ok), int(fmt_ok))
+        return (int(lang_ok), int(fmt_ok), int(num_ok(r)))
 
     matches.sort(key=rank, reverse=True)  # stable → keeps catalogue order within a tier
     return matches[:limit]
