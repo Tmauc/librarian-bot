@@ -18,14 +18,35 @@ logger = logging.getLogger(__name__)
 _MD5_RE = re.compile(r"^[a-f0-9]{32}$")
 MAX_HTML_SIZE = 5 * 1024 * 1024  # 5 MB max for intermediate HTML pages
 
-# Mirrors that reliably waste our time (blocked in FR → 75s connect timeout, or
-# always-503 / captcha-gated): keep them, but try them LAST. See _get_download_links.
+# External mirror hosts Anna links out to (books work through these).
+_MIRROR_HOSTS = ("libgen", "booksdl", "books.ms", "library.lol", "1lib", "z-lib", "zlib")
+# Mirrors that reliably waste our time (blocked in FR → connect timeout, or always-503):
+# keep them, but try them after the good ones.
 _DEPRIORITIZE = ("libgen.is", "z-library", "z-lib", "1lib", "libgen.rs")
 
 
 def _link_rank(url: str) -> int:
+    """Order download links: good external mirrors first (0), known-slow ones next (1),
+    Anna's own membership-gated fast/slow_download last (2) — they 403 without an account."""
     u = url.lower()
+    if "/fast_download/" in u or "/slow_download/" in u:
+        return 2
     return 1 if any(bad in u for bad in _DEPRIORITIZE) else 0
+
+
+def _is_download_link(url: str, md5: str, base_host: str) -> bool:
+    """Whether a scraped link is a real download route (not a search/account page).
+
+    Anna keeps changing this page: the working libgen mirror is now
+    ``libgen.li/file.php?id=<num>`` — NO md5 in the URL — so we must accept mirror hosts
+    and download endpoints, not only links that literally contain the md5."""
+    parsed = urlparse(url.lower())
+    host, path = parsed.netloc, parsed.path
+    if base_host and base_host in host:  # Anna's own domain: only its download endpoints
+        return "/fast_download/" in path or "/slow_download/" in path
+    if any(m in host for m in _MIRROR_HOSTS):
+        return True
+    return any(s in url.lower() for s in ("get.php", "file.php", "ads.php")) or md5.lower() in url.lower()
 
 
 def _validate_md5(md5: str) -> bool:
@@ -267,28 +288,32 @@ class AnnaArchiveSource(Source):
 
     async def _get_download_links(self, client: httpx.AsyncClient, md5: str) -> list[str]:
         page_url = f"{self.base_url}/md5/{md5}"
+        slow = f"{self.base_url}/slow_download/{md5}/0/0"
+        base_host = urlparse(self.base_url).netloc
         try:
             resp = await client.get(page_url)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
-            links = []
+            links: list[str] = []
+            seen: set[str] = set()
             for a in soup.select("a[href]"):
-                href = a.get("href", "")
-                text = a.get_text(strip=True).lower()
-                if any(kw in text for kw in ["download", "télécharger", "get", "mirror", "libgen", "lol"]):
-                    if href.startswith("http") and md5.lower() in href.lower() and _is_safe_url(href):
-                        links.append(href)
-                elif href.startswith("http") and md5.lower() in href.lower() and _is_safe_url(href):
-                    links.append(href)
-            # Try good mirrors first, known-slow ones last (stable sort keeps DOM order
-            # within each rank); Anna's captcha-gated slow_download is the last resort.
+                href = (a.get("href") or "").strip()
+                if not href or href.startswith(("#", "javascript:")):
+                    continue
+                full = href if href.startswith("http") else urljoin(f"{self.base_url}/", href)
+                if full in seen or not _is_safe_url(full) or not _is_download_link(full, md5, base_host):
+                    continue
+                seen.add(full)
+                links.append(full)
+            # Good external mirrors first, Anna's membership-gated endpoints last.
             links.sort(key=_link_rank)
-            links.append(f"{self.base_url}/slow_download/{md5}/0/0")
+            if slow not in seen:  # always keep the last-resort slow_download
+                links.append(slow)
             logger.info(f"Found {len(links)} download links for md5={md5}")
             return links
         except Exception as e:
             logger.warning(f"Could not scrape book page for md5={md5}: {e}")
-            return [f"{self.base_url}/slow_download/{md5}/0/0"]
+            return [slow]
 
     async def _resolve_html_link(self, resp, source_url: str) -> str | None:
         chunks, size = [], 0

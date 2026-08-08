@@ -32,6 +32,16 @@ def test_ip_literals_and_schemes(url, expected):
     assert _is_safe_url(url) is expected
 
 
+def test_nat64_and_ipv4_mapped_validate_embedded_ipv4():
+    """On DNS64/NAT64 networks getaddrinfo returns 64:ff9b:: addresses embedding the
+    real IPv4 — validate that, not the (reserved-flagged) v6 wrapper."""
+    assert _ip_is_safe("64:ff9b::b32b:a7a4") is True    # embeds 179.43.167.164 (public)
+    assert _ip_is_safe("64:ff9b::7f00:1") is False      # embeds 127.0.0.1 (loopback)
+    assert _ip_is_safe("64:ff9b::a00:5") is False       # embeds 10.0.0.5 (private)
+    assert _ip_is_safe("::ffff:8.8.8.8") is True        # IPv4-mapped public
+    assert _ip_is_safe("::ffff:127.0.0.1") is False     # IPv4-mapped loopback
+
+
 def _fake_getaddrinfo(mapping):
     def _resolver(host, *args, **kwargs):
         if host not in mapping:

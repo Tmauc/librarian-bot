@@ -4,13 +4,28 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
+_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+
 
 def _ip_is_safe(ip_str: str) -> bool:
-    """Return True only for a public, routable IP address."""
+    """Return True only for a public, routable IP address.
+
+    On NAT64 / DNS64 networks ``getaddrinfo`` returns an IPv6 address that embeds the
+    real IPv4 (e.g. ``64:ff9b::b32b:a7a4`` for 179.43.167.164). The raw v6 form is
+    flagged ``is_reserved`` and would be wrongly rejected, so when we recognise an
+    IPv4-mapped (``::ffff:0:0/96``) or NAT64 (``64:ff9b::/96``) address we validate the
+    EMBEDDED IPv4 instead — which still blocks a NAT64 wrapping 127.0.0.1 / a private IP.
+    """
     try:
         ip = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
+    if isinstance(ip, ipaddress.IPv6Address):
+        embedded = ip.ipv4_mapped
+        if embedded is None and ip in _NAT64_PREFIX:
+            embedded = ipaddress.ip_address(int(ip) & 0xFFFFFFFF)
+        if embedded is not None:
+            ip = embedded
     return not (
         ip.is_loopback
         or ip.is_private
