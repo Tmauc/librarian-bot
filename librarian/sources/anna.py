@@ -1,5 +1,6 @@
 """Anna's Archive source (ported from anna_archive.py)."""
 
+import asyncio
 import logging
 import re
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -200,14 +201,26 @@ class AnnaArchiveSource(Source):
             return await self._search_html(client, query)
 
     async def _search_html(self, client: httpx.AsyncClient, query: str) -> list[SearchResult]:
-        try:
-            resp = await client.get(
-                f"{self.base_url}/search",
-                params={"q": query, "lang": "", "content": "book_any", "ext": "epub,pdf,mobi"},
-            )
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error(f"Anna's Archive HTML search failed: {e}")
+        resp = None
+        for attempt in range(4):  # Anna rate-limits big series (429) → back off and retry
+            try:
+                resp = await client.get(
+                    f"{self.base_url}/search",
+                    params={"q": query, "lang": "", "content": "book_any", "ext": "epub,pdf,mobi"},
+                )
+                if resp.status_code == 429:
+                    await asyncio.sleep(2 * (attempt + 1))
+                    resp = None
+                    continue
+                resp.raise_for_status()
+                break
+            except Exception as e:
+                if attempt == 3:
+                    logger.error(f"Anna's Archive HTML search failed: {e}")
+                    return []
+                await asyncio.sleep(1.5 * (attempt + 1))
+        if resp is None:
+            logger.warning(f"Anna search gave up (rate-limited) for {query!r}")
             return []
 
         soup = BeautifulSoup(resp.text, "html.parser")

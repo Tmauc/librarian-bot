@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # A batch (« l'intégrale de X ») fans out one search per volume — 17 tomes × 2 queries
 # = 34 at once, which makes Anna return 429 Too Many Requests. Cap how many searches hit
 # the sources concurrently so large series don't get rate-limited.
-_MAX_CONCURRENT_SEARCHES = 4
+_MAX_CONCURRENT_SEARCHES = 3
 _search_sem = asyncio.Semaphore(_MAX_CONCURRENT_SEARCHES)
 
 
