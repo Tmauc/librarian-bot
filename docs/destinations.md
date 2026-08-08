@@ -38,8 +38,18 @@ cloud** (the `sort_scheme` pref):
 book: **Dropbox** just uploads to the full path (folders auto-created); **Google Drive** resolves
 or creates each folder id (cached per run) and sets it as the parent. Volumes in a series are
 prefixed with their number (`01 - …`) so they sort in reading order. The sort option only appears
-once a cloud destination is configured. Re-sorting an existing folder after a scheme change is a
-planned on-demand action (not automatic).
+once a cloud destination is configured.
+
+### Re-organising after a scheme change
+
+Changing the scheme also offers **🔁 Réorganiser mon dossier** (also a standalone `/settings`
+entry). It re-files **only the books the bot uploaded** — never the user's own files — via cheap
+server-side moves, no re-download. Each upload is recorded in a local manifest
+([`core/manifest.py`](../librarian/core/manifest.py), `user_manifest.json`, gitignored): the
+book's author/series/filename + its current location (Drive file id + parent, or Dropbox path).
+`reorganize()` recomputes the target path for the new scheme and moves what changed (**Drive**:
+`addParents`/`removeParents`; **Dropbox**: `files/move_v2`), updating the manifest. Re-sort is
+never automatic — it's an explicit user action.
 
 ## The contract: `Destination`
 

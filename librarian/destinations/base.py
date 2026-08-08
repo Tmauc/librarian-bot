@@ -12,11 +12,12 @@ handling, so the flow just picks one and calls ``deliver``.
 from __future__ import annotations
 
 import abc
+import contextlib
 import logging
 import re
 from typing import TYPE_CHECKING
 
-from librarian.core import delivery, prefs
+from librarian.core import delivery, manifest, prefs
 
 if TYPE_CHECKING:
     from librarian.clients.base import ClientContext
@@ -58,6 +59,13 @@ def subfolders(scheme: str, meta: BookMeta) -> list[str]:
 async def sort_scheme_for(ctx: ClientContext) -> str:
     scheme = (await prefs.get(ctx.user_key)).get("sort_scheme", DEFAULT_SORT_SCHEME)
     return scheme if scheme in SORT_SCHEMES else DEFAULT_SORT_SCHEME
+
+
+def _folders_for_record(scheme: str, rec: dict) -> list[str]:
+    """Recompute the target sub-folders for a manifest record under ``scheme``."""
+    from librarian.core.metadata import BookMeta
+
+    return subfolders(scheme, BookMeta(author=rec.get("author", ""), series=rec.get("series", "")))
 
 
 class Destination(abc.ABC):
@@ -126,14 +134,45 @@ class CloudUploadDestination(Destination):
         folders = subfolders(await sort_scheme_for(ctx), meta) if meta is not None else []
         try:
             await ctx.say(f"☁️ Envoi vers {self.where}…")
-            await self._upload(path, filename, folders)
+            location = await self._upload(path, filename, folders)
             where = f"{self.where}/{'/'.join(folders)}" if folders else self.where
             await ctx.say(f"✅ Déposé sur {where} — synchronise ta liseuse 📖")
         except Exception as e:
             logger.warning(f"{self.name} upload failed: {e}")
             await ctx.say(f"❌ Envoi vers {self.where} échoué. Vérifie la configuration.")
+            return
+        # Remember what we placed so a later re-sort can move only our files.
+        if meta is not None:
+            with contextlib.suppress(Exception):
+                await manifest.add(self.name, {
+                    "filename": filename, "author": meta.author, "series": meta.series,
+                    "folders": folders, **(location or {}),
+                })
+
+    async def reorganize(self, ctx: ClientContext, scheme: str) -> tuple[int, int]:
+        """Move the files we've uploaded into the layout ``scheme`` implies. Returns
+        (moved, tracked). Only touches files recorded in the manifest — never the
+        user's own files. Cheap server-side moves; no re-download."""
+        recs = await manifest.records(self.name)
+        changes = []
+        for rec in recs:
+            new_folders = _folders_for_record(scheme, rec)
+            if new_folders != rec.get("folders", []):
+                changes.append((rec, new_folders))
+        if changes:
+            await self._move_all(changes)  # provider mutates each rec (location + folders)
+            await manifest.save(self.name, recs)
+        moved = sum(1 for rec, nf in changes if rec.get("folders") == nf)
+        return moved, len(recs)
 
     @abc.abstractmethod
-    async def _upload(self, path: str, filename: str, subfolders: list[str]) -> None:
-        """Upload the file to the provider under ``subfolders`` (created as needed).
-        ``subfolders`` empty = the destination root. Raise on failure."""
+    async def _upload(self, path: str, filename: str, subfolders: list[str]) -> dict:
+        """Upload the file under ``subfolders`` (created as needed; empty = root). Return a
+        provider-specific location dict (stored in the manifest for re-sorting). Raise on
+        failure."""
+
+    @abc.abstractmethod
+    async def _move_all(self, changes: list[tuple[dict, list[str]]]) -> None:
+        """Move each recorded file to its ``new_folders`` location. For every success,
+        update the record in place (its location fields **and** ``folders``); leave failed
+        records untouched. Never raises for a single item."""

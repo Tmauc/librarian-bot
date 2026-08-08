@@ -8,6 +8,7 @@ See docs/destinations.md for how to obtain the credentials.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING
 
 import httpx
@@ -17,6 +18,8 @@ from librarian.destinations.base import CloudUploadDestination
 
 if TYPE_CHECKING:
     from librarian.clients.base import ClientContext
+
+logger = logging.getLogger(__name__)
 
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=media&supportsAllDrives=true"
@@ -91,7 +94,7 @@ class GoogleDriveDestination(CloudUploadDestination):
         self._folder_cache[key] = folder_id
         return folder_id
 
-    async def _upload(self, path: str, filename: str, subfolders: list[str]) -> None:
+    async def _upload(self, path: str, filename: str, subfolders: list[str]) -> dict:
         async with httpx.AsyncClient(timeout=90) as client:
             access = await self._access_token(client)
             headers = {"Authorization": f"Bearer {access}"}
@@ -100,7 +103,7 @@ class GoogleDriveDestination(CloudUploadDestination):
             parent = config.GDRIVE_FOLDER_ID or "root"
             for segment in subfolders:
                 parent = await self._folder_id(client, headers, parent, segment)
-            target = parent if (subfolders or config.GDRIVE_FOLDER_ID) else ""
+            target = parent if (subfolders or config.GDRIVE_FOLDER_ID) else "root"
 
             data = await asyncio.get_event_loop().run_in_executor(None, _read_bytes, path)
 
@@ -113,7 +116,7 @@ class GoogleDriveDestination(CloudUploadDestination):
 
             # 2) name it (and move it into the resolved folder, if any)
             params = {"supportsAllDrives": "true"}
-            if target:
+            if target != "root" or subfolders or config.GDRIVE_FOLDER_ID:
                 params["addParents"] = target
             patch = await client.patch(
                 f"{_FILES_URL}/{file_id}",
@@ -122,3 +125,31 @@ class GoogleDriveDestination(CloudUploadDestination):
                 json={"name": filename},
             )
             patch.raise_for_status()
+        return {"file_id": file_id, "parent": target}
+
+    async def _move_all(self, changes: list[tuple[dict, list[str]]]) -> None:
+        async with httpx.AsyncClient(timeout=90) as client:
+            access = await self._access_token(client)
+            headers = {"Authorization": f"Bearer {access}"}
+            root = config.GDRIVE_FOLDER_ID or "root"
+            for rec, new_folders in changes:
+                try:
+                    parent = root
+                    for segment in new_folders:
+                        parent = await self._folder_id(client, headers, parent, segment)
+                    old_parent = rec.get("parent") or root
+                    if parent == old_parent:
+                        rec["folders"] = new_folders
+                        continue
+                    resp = await client.patch(
+                        f"{_FILES_URL}/{rec['file_id']}",
+                        params={"supportsAllDrives": "true", "addParents": parent,
+                                "removeParents": old_parent},
+                        headers={**headers, "Content-Type": "application/json"},
+                        json={},
+                    )
+                    resp.raise_for_status()
+                    rec["parent"] = parent
+                    rec["folders"] = new_folders
+                except Exception as e:
+                    logger.warning(f"Drive move failed for {rec.get('filename')!r}: {e}")

@@ -6,6 +6,7 @@ them.
 """
 
 import os
+import tempfile
 import zipfile
 
 import pytest
@@ -13,6 +14,8 @@ import pytest
 os.environ.setdefault("TELEGRAM_TOKEN", "123:test")
 os.environ.setdefault("ALLOWED_USER_IDS", "1")
 os.environ.setdefault("ALLOWED_FORMATS", "epub,pdf")  # deterministic for flow tests
+# Never touch the developer's real upload manifest during tests.
+os.environ.setdefault("USER_MANIFEST_FILE", os.path.join(tempfile.gettempdir(), "librarian_test_manifest.json"))
 
 # Keep the suite hermetic: ignore a developer's local .env by blanking the optional
 # integrations (config's load_dotenv won't override values already in the environment).

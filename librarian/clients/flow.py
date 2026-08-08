@@ -28,7 +28,12 @@ from librarian.core import (
 )
 from librarian.core.metadata import BookMeta
 from librarian.destinations import registry as destinations
-from librarian.destinations.base import DEFAULT_SORT_SCHEME, SORT_SCHEMES, Destination
+from librarian.destinations.base import (
+    DEFAULT_SORT_SCHEME,
+    SORT_SCHEMES,
+    CloudUploadDestination,
+    Destination,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +114,7 @@ async def run_settings(ctx: ClientContext) -> None:
         ]
         if has_cloud:
             options.append(Choice("📂 Rangement cloud", "sort"))
+            options.append(Choice("🔁 Réorganiser mon dossier", "reorg"))
         options += [Choice("❌ Supprimer mes données", "delete"), Choice("✅ Fermer", "close")]
         choice = await ctx.ask_choice(text, options, cancellable=False)
         if choice == "close":
@@ -121,6 +127,17 @@ async def run_settings(ctx: ClientContext) -> None:
                 cancellable=False,
             )
             await prefs.set(ctx.user_key, "sort_scheme", scheme)
+            yn = await ctx.ask_choice(
+                "🔁 Réorganiser tout de suite le dossier existant selon ce rangement ?\n"
+                "(ne déplace que les livres déposés par le bot)",
+                [Choice("✅ Oui", "yes"), Choice("❌ Plus tard", "no")],
+                cancellable=False,
+            )
+            if yn == "yes":
+                await _reorganize_cloud(ctx, scheme)
+        elif choice == "reorg":
+            scheme = (await prefs.get(ctx.user_key)).get("sort_scheme", DEFAULT_SORT_SCHEME)
+            await _reorganize_cloud(ctx, scheme)
         elif choice == "fmt":
             fmt = await ctx.ask_choice(
                 "📚 Quel format préfères-tu ?",
@@ -150,6 +167,28 @@ async def run_settings(ctx: ClientContext) -> None:
                 await prefs.delete_user(ctx.user_key)
                 await ctx.say("✅ Préférences supprimées. Utilise /settings pour reconfigurer.")
                 return
+
+
+async def _reorganize_cloud(ctx: ClientContext, scheme: str) -> None:
+    """Re-file the books the bot has uploaded into the layout ``scheme`` implies,
+    across every configured cloud destination. Moves only our files."""
+    clouds = [d for d in await destinations.available_for(ctx) if isinstance(d, CloudUploadDestination)]
+    if not clouds:
+        await ctx.say("☁️ Aucune destination cloud configurée.")
+        return
+    await ctx.say(f"🔁 Réorganisation en « {SORT_SCHEMES.get(scheme, scheme)} »…")
+    moved = tracked = 0
+    for d in clouds:
+        try:
+            m, t = await d.reorganize(ctx, scheme)
+            moved += m
+            tracked += t
+        except Exception as e:
+            logger.warning(f"Reorganize failed for {d.name}: {e}")
+    if tracked == 0:
+        await ctx.say("📭 Rien à réorganiser pour l'instant (aucun livre déposé par le bot).")
+    else:
+        await ctx.say(f"✅ Réorganisation terminée — {moved} livre(s) déplacé(s) sur {tracked} suivi(s).")
 
 
 async def run_search(ctx: ClientContext, query: str) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import TYPE_CHECKING
 
 import httpx
@@ -19,8 +20,18 @@ from librarian.destinations.base import CloudUploadDestination
 if TYPE_CHECKING:
     from librarian.clients.base import ClientContext
 
+logger = logging.getLogger(__name__)
+
 _TOKEN_URL = "https://api.dropbox.com/oauth2/token"
 _UPLOAD_URL = "https://content.dropboxapi.com/2/files/upload"
+_MOVE_URL = "https://api.dropboxapi.com/2/files/move_v2"
+
+
+def _full_path(subfolders: list[str], filename: str) -> str:
+    segments = [config.DROPBOX_FOLDER.strip("/")] if config.DROPBOX_FOLDER else []
+    segments += [s.strip("/") for s in subfolders]
+    segments.append(filename)
+    return "/" + "/".join(s for s in segments if s)
 
 
 def _read_bytes(path: str) -> bytes:
@@ -45,12 +56,9 @@ class DropboxDestination(CloudUploadDestination):
         resp.raise_for_status()
         return resp.json()["access_token"]
 
-    async def _upload(self, path: str, filename: str, subfolders: list[str]) -> None:
+    async def _upload(self, path: str, filename: str, subfolders: list[str]) -> dict:
         # Dropbox creates intermediate folders on upload — just build the full path.
-        segments = [config.DROPBOX_FOLDER.strip("/")] if config.DROPBOX_FOLDER else []
-        segments += [s.strip("/") for s in subfolders]
-        segments.append(filename)
-        full_path = "/" + "/".join(s for s in segments if s)
+        full_path = _full_path(subfolders, filename)
         # Dropbox-API-Arg must be an ASCII header; ensure_ascii escapes any accents.
         arg = json.dumps(
             {"path": full_path, "mode": "overwrite", "mute": True, "autorename": True},
@@ -69,3 +77,24 @@ class DropboxDestination(CloudUploadDestination):
                 },
             )
             resp.raise_for_status()
+        return {"path": resp.json().get("path_display", full_path)}
+
+    async def _move_all(self, changes: list[tuple[dict, list[str]]]) -> None:
+        async with httpx.AsyncClient(timeout=90) as client:
+            access = await self._access_token(client)
+            headers = {"Authorization": f"Bearer {access}", "Content-Type": "application/json"}
+            for rec, new_folders in changes:
+                new_path = _full_path(new_folders, rec["filename"])
+                if new_path == rec.get("path"):
+                    rec["folders"] = new_folders
+                    continue
+                try:
+                    resp = await client.post(
+                        _MOVE_URL, headers=headers,
+                        json={"from_path": rec["path"], "to_path": new_path, "autorename": True},
+                    )
+                    resp.raise_for_status()
+                    rec["path"] = resp.json().get("metadata", {}).get("path_display", new_path)
+                    rec["folders"] = new_folders
+                except Exception as e:
+                    logger.warning(f"Dropbox move failed for {rec.get('filename')!r}: {e}")

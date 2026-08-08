@@ -257,6 +257,98 @@ def test_gdrive_upload_creates_folder_chain(monkeypatch, tmp_path):
     assert patch["params"]["addParents"] == "NEWFOLDER"  # filed into the deepest folder
 
 
+# --- re-organisation (manifest + moves) ------------------------------------
+def test_manifest_add_dedups_same_book(monkeypatch, tmp_path):
+    from librarian.core import manifest
+
+    monkeypatch.setattr(manifest, "MANIFEST_FILE", str(tmp_path / "m.json"))
+    rec1 = {"filename": "X.epub", "author": "A", "series": "S", "folders": ["A", "S"], "file_id": "1"}
+    rec2 = {"filename": "X.epub", "author": "A", "series": "S", "folders": [], "file_id": "2"}  # same book
+    asyncio.run(manifest.add("gdrive", rec1))
+    asyncio.run(manifest.add("gdrive", rec2))
+    recs = asyncio.run(manifest.records("gdrive"))
+    assert len(recs) == 1 and recs[0]["file_id"] == "2"  # latest wins
+    assert asyncio.run(manifest.records("dropbox")) == []  # namespaced by provider
+
+
+def test_gdrive_reorganize_moves_tracked_files(monkeypatch, tmp_path):
+    from librarian.core import manifest
+    from librarian.destinations import gdrive as gd
+
+    for k, v in (("GDRIVE_REFRESH_TOKEN", "rt"), ("GDRIVE_CLIENT_ID", "id"),
+                 ("GDRIVE_CLIENT_SECRET", "sec"), ("GDRIVE_FOLDER_ID", "ROOT")):
+        monkeypatch.setattr(config, k, v)
+    monkeypatch.setattr(manifest, "MANIFEST_FILE", str(tmp_path / "m.json"))
+    # A book currently at the root (folders []) — the author_series scheme wants it moved.
+    asyncio.run(manifest.save("gdrive", [
+        {"filename": "01 - X.epub", "author": "Anne Robillard", "series": "Chevaliers",
+         "folders": [], "file_id": "F1", "parent": "ROOT"},
+    ]))
+
+    def responder(method, url):
+        if "/token" in url:
+            return {"access_token": "AT"}
+        if method == "GET":
+            return {"files": [{"id": "AUTH"}]}   # folder resolves (found, no create)
+        return {}                                # PATCH move
+
+    calls = _fake_httpx(monkeypatch, gd, responder)
+    moved, tracked = asyncio.run(gd.GoogleDriveDestination().reorganize(FakeCtx(), "author_series"))
+    assert (moved, tracked) == (1, 1)
+    mv = next(c for c in calls if c["m"] == "PATCH")
+    assert mv["url"].endswith("/files/F1")
+    assert mv["params"]["addParents"] == "AUTH" and mv["params"]["removeParents"] == "ROOT"
+    rec = asyncio.run(manifest.records("gdrive"))[0]
+    assert rec["parent"] == "AUTH" and rec["folders"] == ["Anne Robillard", "Chevaliers"]
+
+
+def test_dropbox_reorganize_moves_tracked_files(monkeypatch, tmp_path):
+    from librarian.core import manifest
+    from librarian.destinations import dropbox as dbx
+
+    for k, v in (("DROPBOX_REFRESH_TOKEN", "rt"), ("DROPBOX_APP_KEY", "k"),
+                 ("DROPBOX_APP_SECRET", "s"), ("DROPBOX_FOLDER", "/Kobo")):
+        monkeypatch.setattr(config, k, v)
+    monkeypatch.setattr(manifest, "MANIFEST_FILE", str(tmp_path / "m.json"))
+    asyncio.run(manifest.save("dropbox", [
+        {"filename": "01 - X.epub", "author": "Anne Robillard", "series": "Chevaliers",
+         "folders": [], "path": "/Kobo/01 - X.epub"},
+    ]))
+
+    def responder(method, url):
+        if "/token" in url:
+            return {"access_token": "AT"}
+        return {"metadata": {"path_display": "/Kobo/Anne Robillard/Chevaliers/01 - X.epub"}}
+
+    calls = _fake_httpx(monkeypatch, dbx, responder)
+    moved, tracked = asyncio.run(dbx.DropboxDestination().reorganize(FakeCtx(), "author_series"))
+    assert (moved, tracked) == (1, 1)
+    mv = next(c for c in calls if c["url"].endswith("/files/move_v2"))
+    assert mv["json"]["from_path"] == "/Kobo/01 - X.epub"
+    assert mv["json"]["to_path"] == "/Kobo/Anne Robillard/Chevaliers/01 - X.epub"
+    rec = asyncio.run(manifest.records("dropbox"))[0]
+    assert rec["folders"] == ["Anne Robillard", "Chevaliers"]
+
+
+def test_reorganize_noop_when_scheme_unchanged(monkeypatch, tmp_path):
+    from librarian.core import manifest
+    from librarian.destinations import gdrive as gd
+
+    for k, v in (("GDRIVE_REFRESH_TOKEN", "rt"), ("GDRIVE_CLIENT_ID", "id"),
+                 ("GDRIVE_CLIENT_SECRET", "sec"), ("GDRIVE_FOLDER_ID", "ROOT")):
+        monkeypatch.setattr(config, k, v)
+    monkeypatch.setattr(manifest, "MANIFEST_FILE", str(tmp_path / "m.json"))
+    # Already filed by author_series → re-running the same scheme moves nothing.
+    asyncio.run(manifest.save("gdrive", [
+        {"filename": "X.epub", "author": "A", "series": "S",
+         "folders": ["A", "S"], "file_id": "F1", "parent": "P"},
+    ]))
+    calls = _fake_httpx(monkeypatch, gd, {"/token": {"access_token": "AT"}})
+    moved, tracked = asyncio.run(gd.GoogleDriveDestination().reorganize(FakeCtx(), "author_series"))
+    assert (moved, tracked) == (0, 1)
+    assert not any(c["m"] == "PATCH" for c in calls)  # no move issued
+
+
 def test_gdrive_available_requires_credentials(monkeypatch):
     from librarian.destinations.gdrive import GoogleDriveDestination
 
