@@ -69,6 +69,30 @@ def test_no_candidates(monkeypatch):
     assert asyncio.run(series.volumes("inconnu")) == []
 
 
+def test_query_restricts_volumes_to_written_works(monkeypatch):
+    """The SPARQL must require books (P31/P279* literary work) so film/game adaptations
+    in the same Wikidata series are never offered as tomes (e.g. Hunger Games films)."""
+    captured = {}
+
+    class _Cap:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, params=None):
+            if "api.php" in url:
+                return _Resp({"search": [{"id": "Q1"}]})
+            captured["query"] = (params or {}).get("query", "")
+            return _Resp(_sparql_rows([]))
+
+    monkeypatch.setattr(series.httpx, "AsyncClient", lambda *a, **k: _Cap())
+    asyncio.run(series.volumes("Hunger Games"))
+    assert "wdt:P31/wdt:P279*" in captured["query"]
+    assert "Q7725634" in captured["query"]
+
+
 def test_skips_unlabelled_qid_and_dupes(monkeypatch):
     _install(
         monkeypatch,

@@ -300,6 +300,41 @@ def test_batch_falls_back_across_editions(monkeypatch):
     assert "1/1" in ctx.messages[-1]
 
 
+def test_best_matches_prefers_language_then_format():
+    from librarian.clients.flow import _best_matches
+    from librarian.core.models import SearchResult
+
+    results = [
+        SearchResult("s", "Hunger Games", "pdf", language="English"),
+        SearchResult("s", "Hunger Games", "epub", language="English"),
+        SearchResult("s", "Hunger Games", "pdf", language="Français"),
+        SearchResult("s", "Hunger Games", "epub", language="Français"),
+    ]
+    ranked = _best_matches("Hunger Games", results, language="fr", fmt="epub")
+    # French EPUB first, then French PDF, then the English ones.
+    assert (ranked[0].language, ranked[0].ext) == ("Français", "epub")
+    assert (ranked[1].language, ranked[1].ext) == ("Français", "pdf")
+
+
+def test_batch_epub_target_skips_non_epub_candidates():
+    """desired_fmt=epub must never deliver a PDF (we can't convert *to* epub)."""
+    from librarian.destinations.here import ThisChatDestination
+
+    async def scenario():
+        results = [
+            SearchResult("stub", "Only PDF", "pdf", size_bytes=1000, ref={"id": 1}),
+            SearchResult("stub", "Real EPUB", "epub", size_bytes=1000, ref={"id": 2}),
+        ]
+        registry._ALL[:] = [StubSource(results)]
+        s = Session("test:1")
+        ctx = FakeContext(s)
+        await drive(s, flow._deliver(ctx, results, 0, "epub", ThisChatDestination()), [])
+        return ctx
+
+    ctx = asyncio.run(scenario())
+    assert ctx.docs and ctx.docs[0][0].endswith(".epub")  # PDF skipped, EPUB delivered
+
+
 def test_multi_choice_select_all_returns_every_value():
     from librarian.clients.base import ALL, Choice
 

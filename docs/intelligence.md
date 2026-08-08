@@ -17,10 +17,15 @@ See also: [architecture](architecture.md) · [configuration](configuration.md).
    hallucinates them for niche series).
 2. The series name is resolved against **Wikidata**
    ([`core/series.py`](../librarian/core/series.py)) to get the **canonical, ordered
-   volume list** — reliable even for niche series (free, no key).
-3. Each canonical volume is searched in the **real catalogue** (Anna's Archive); the best
-   matching file is kept (volumes that match nothing — Wikidata noise like prologues or
-   foreign editions — are dropped).
+   volume list** — reliable even for niche series (free, no key). The SPARQL restricts
+   volumes to **written works** (`P31/P279*` literary work), so film/game adaptations in
+   the same series are never offered as tomes (e.g. the Hunger Games *films*, one split
+   into « La Révolte partie 1/2 », are excluded — only the books remain).
+3. Each canonical volume is searched in the **real catalogue** (Anna's Archive); candidate
+   editions are ranked so the **requested language and format come first** (e.g. a French
+   EPUB before an English PDF), and an EPUB target never delivers a non-EPUB. Volumes that
+   resolve to a file an earlier volume already claimed are de-duplicated. A volume matching
+   nothing is dropped.
 4. The user **multi-selects** which tomes to download from that clean ordered list; each
    volume carries several **candidate editions**, so a dead mirror falls back to the next
    edition instead of failing the tome. A batch downloads under **one live message**: a

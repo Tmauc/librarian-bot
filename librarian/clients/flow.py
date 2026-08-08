@@ -389,13 +389,14 @@ async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
     preferring the requested language), then backfill any numbered tome the catalogue
     has but Wikidata missed. Returns ordered ``(number, title, [results])`` tuples."""
     lang = plan.language
+    fmt = plan.desired_format if plan.desired_format in config.ALLOWED_FORMATS else config.ALLOWED_FORMATS[0]
     searches = await asyncio.gather(
         *[search_service.search(f"{plan.query} {title}", ctx.max_file_size) for _, title in vols]
     )
     entries: list[tuple] = []
     covered: set[int] = set()
     for (num, title), results in zip(vols, searches, strict=True):
-        cands = _best_matches(title, results, lang)
+        cands = _best_matches(title, results, lang, fmt)
         if cands:
             entries.append((num, title, cands))
             if num is not None:
@@ -405,25 +406,52 @@ async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
     for r in await search_service.search(plan.query, ctx.max_file_size):
         if lang and r.language and not _lang_match(r.language, lang):
             continue
+        if fmt and r.ext and r.ext != fmt:  # respect the desired format (e.g. epub only)
+            continue
         num = _detect_tome(r.title)
         if num is not None and num not in covered:
             covered.add(num)
             entries.append((num, r.title, [r]))
 
+    entries = _dedupe_entries(entries)
     entries.sort(key=lambda e: (e[0] is None, e[0] if e[0] is not None else 0))
     return entries
 
 
-def _best_matches(vol: str, results, language: str = "", limit: int = 5):
-    """Up to ``limit`` results sharing a distinctive word with the volume title, the
-    requested language first — several candidate editions so download can fall back
-    when a mirror is dead. Empty if nothing plausible."""
+def _file_key(r) -> str:
+    """Identity of a catalogue file (md5 when known, else its normalized title)."""
+    md5 = (r.ref or {}).get("md5")
+    return md5 or re.sub(r"\s+", " ", (r.title or "").lower()).strip()
+
+
+def _dedupe_entries(entries: list[tuple]) -> list[tuple]:
+    """Drop volumes that resolve to a file an earlier volume already claimed — e.g. a
+    series Wikidata splits into « partie 1 / partie 2 » but the catalogue has as one
+    file. Each later volume loses candidates already taken; if none remain, it's skipped."""
+    seen: set[str] = set()
+    out: list[tuple] = []
+    for num, title, cands in entries:
+        fresh = [c for c in cands if _file_key(c) not in seen]
+        if not fresh:
+            continue
+        seen.add(_file_key(fresh[0]))
+        out.append((num, title, fresh))
+    return out
+
+
+def _best_matches(vol: str, results, language: str = "", fmt: str = "", limit: int = 5):
+    """Up to ``limit`` plausible editions of ``vol``, ranked so the requested language
+    AND format come first (e.g. a French EPUB before an English PDF) — several
+    candidates so download can fall back when a mirror is dead. Empty if none plausible."""
     words = {w for w in re.sub(r"[^\w]", " ", vol.lower()).split() if len(w) > 3}
-    matches = [r for r in results[:12] if not words or any(w in r.title.lower() for w in words)]
-    if language:
-        preferred = [r for r in matches if r.language and _lang_match(r.language, language)]
-        rest = [r for r in matches if r not in preferred]
-        matches = preferred + rest
+    matches = [r for r in results[:15] if not words or any(w in r.title.lower() for w in words)]
+
+    def rank(r) -> tuple[int, int]:
+        lang_ok = bool(language and r.language and _lang_match(r.language, language))
+        fmt_ok = bool(fmt and r.ext == fmt)
+        return (int(lang_ok), int(fmt_ok))
+
+    matches.sort(key=rank, reverse=True)  # stable → keeps catalogue order within a tier
     return matches[:limit]
 
 
@@ -622,7 +650,10 @@ async def _fetch_with_retry(ctx: ClientContext, results, start_idx: int, desired
         result = results[i]
         ext = result.ext or "epub"
 
-        # Only an EPUB converts to MOBI/AZW3; PDF target accepts EPUB or PDF.
+        # We can't convert *to* EPUB, so an EPUB target only accepts EPUB sources.
+        # Only an EPUB converts to MOBI/AZW3; a PDF target accepts EPUB or PDF.
+        if desired_fmt == "epub" and ext != "epub":
+            continue
         if desired_fmt in ("mobi", "azw3") and ext != "epub":
             continue
         if desired_fmt == "pdf" and ext not in ("epub", "pdf"):

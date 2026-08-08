@@ -11,6 +11,13 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# A Wikidata "series" (P179) groups everything: books, but also the film adaptations,
+# video games, etc. We only want the BOOKS, so we require each volume to be a written
+# work (literary work / book / novel via subclass-of). This is what stops e.g. the
+# Hunger Games *films* — one of which was split into « La Révolte partie 1 / partie 2 »
+# — from being offered as tomes. Q7725634 = literary work.
+_WRITTEN_WORK = "wd:Q7725634"
+
 _UA = {"User-Agent": "librarian-bot/2.x (series lookup)"}
 _API = "https://www.wikidata.org/w/api.php"
 _SPARQL = "https://query.wikidata.org/sparql"
@@ -54,6 +61,7 @@ async def _parts(client: httpx.AsyncClient, qid: str, language: str) -> list[tup
     query = (
         "SELECT ?vol ?volLabel ?ord WHERE {"
         f"  ?vol wdt:P179 wd:{qid} ."
+        f"  ?vol wdt:P31/wdt:P279* {_WRITTEN_WORK} ."  # books only — exclude films/games/…
         f"  OPTIONAL {{ ?vol p:P179 [ ps:P179 wd:{qid} ; pq:P1545 ?ord ] }}"
         f'  SERVICE wikibase:label {{ bd:serviceParam wikibase:language "{langs}". }}'
         "} ORDER BY xsd:integer(?ord)"
