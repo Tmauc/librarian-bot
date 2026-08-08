@@ -46,7 +46,7 @@ def _banner(clients: list[str]) -> None:
         logger.info(f"  Source {s.name:<10}: {'✓ activée' if s.name in enabled else '✗ désactivée'}")
     logger.info(f"  Formats        : {', '.join(config.ALLOWED_FORMATS)}")
     logger.info(f"  VirusTotal     : {'✓ activé' if scanning.VT_API_KEY else '✗ désactivé'}")
-    logger.info(f"  Calibre        : {'✓ trouvé' if conversion.ebook_convert_available() else '✗ absent (MOBI/AZW3 requièrent Calibre)'}")
+    logger.info(f"  Calibre        : {'✓ trouvé (conversions + métadonnées)' if conversion.ebook_convert_available() else '✗ absent (métadonnées via OPF ; MOBI/AZW3 indispo)'}")
     logger.info(f"  Email / Kindle : {'✓ activé' if delivery.is_configured() else '✗ désactivé'}")
     logger.info(f"  Mises à jour   : {'✓ ' + config.GITHUB_REPO if config.GITHUB_REPO else '✗ désactivées'}")
 

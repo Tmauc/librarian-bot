@@ -22,10 +22,19 @@ See also: [architecture](architecture.md) · [configuration](configuration.md).
    matching file is kept (volumes that match nothing — Wikidata noise like prologues or
    foreign editions — are dropped).
 4. The user **multi-selects** which tomes to download from that clean ordered list; each
-   is downloaded and delivered to one destination.
+   volume carries several **candidate editions**, so a dead mirror falls back to the next
+   edition instead of failing the tome. A batch downloads under **one live message**: a
+   global progress bar + a per-tome ✅/❌ checklist.
+5. Before delivery each file is **re-tagged** with clean metadata
+   ([`core/metadata.py`](../librarian/core/metadata.py)) — title/author/**series+number**/
+   language/year/cover — so it groups correctly on the reader. The series name + volume
+   number come from Wikidata (step 2); Anna fills author/year/cover; **Open Library** (free,
+   keyless) fills any remaining gaps (ISBN, cover). Written via Calibre's `ebook-meta` when
+   available (best packaging + cover embedding, and MOBI/AZW3), else a careful in-place OPF
+   edit for EPUB. Best-effort — a tagging failure never blocks the download.
 
 If Wikidata doesn't know the series, it falls back to a raw catalogue search + multi-select.
-Plain single-title searches (`dune`) skip all of this.
+Plain single-title searches (`dune`) skip the batch, but their file is **still re-tagged**.
 
 The LLM only *extracts an intent* and Wikidata provides the *knowledge*, so even a small
 model does the job and nothing is invented.

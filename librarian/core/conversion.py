@@ -4,18 +4,19 @@ import asyncio
 import contextlib
 import logging
 import os
-import shutil
 import subprocess
 import tempfile
 
 import fitz  # pymupdf
 
+from librarian.core import calibre
+
 logger = logging.getLogger(__name__)
 
 
 def ebook_convert_available() -> bool:
-    """Return True if Calibre's ebook-convert is available in PATH."""
-    return shutil.which("ebook-convert") is not None
+    """Return True if Calibre's ebook-convert can be found (PATH or app bundle)."""
+    return calibre.tool("ebook-convert") is not None
 
 
 def _convert_sync(epub_path: str) -> str:
@@ -85,7 +86,7 @@ def _convert_to_format_sync(epub_path: str, fmt: str) -> str:
 
 def _convert_with_calibre(input_path: str, output_path: str) -> None:
     """Convert using Calibre's ebook-convert CLI (blocking)."""
-    cmd = shutil.which("ebook-convert")
+    cmd = calibre.tool("ebook-convert")
     result = subprocess.run(
         [cmd, input_path, output_path],
         capture_output=True, text=True, timeout=120,

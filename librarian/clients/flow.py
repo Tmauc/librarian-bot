@@ -16,7 +16,17 @@ import time
 
 from librarian import config
 from librarian.clients.base import CANCEL, SKIP, Card, Choice, ClientContext
-from librarian.core import conversion, download_service, planner, prefs, scanning, search_service, series
+from librarian.core import (
+    conversion,
+    download_service,
+    metadata,
+    planner,
+    prefs,
+    scanning,
+    search_service,
+    series,
+)
+from librarian.core.metadata import BookMeta
 from librarian.destinations import registry as destinations
 from librarian.destinations.base import Destination
 
@@ -265,8 +275,13 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
             footer="Série identifiée via Wikidata + catalogue",
         )
         picked = await ctx.ask_multi_choice(card, choices)
-        # Each pick keeps its list of candidate editions → download can fall back.
-        chosen = [(_vol_label(*entries[int(v)][:2]), entries[int(v)][2]) for v in picked]
+        # Each pick keeps its candidate editions (download can fall back) + a metadata
+        # hint (canonical series/number/title from Wikidata) for clean tagging.
+        chosen = []
+        for v in picked:
+            num, title, cands = entries[int(v)]
+            hint = BookMeta(title=title, series=plan.query, index=num, language=plan.language)
+            chosen.append((_vol_label(num, title), cands, hint))
     else:  # fallback: unknown series → raw catalogue, user sorts it out
         await ctx.say(f"🔎 Recherche de « {plan.query} »…")
         results = await search_service.search(plan.query, ctx.max_file_size)
@@ -275,7 +290,10 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
             return
         card = Card(title=f"🧠 {plan.query}", description="Coche les tomes à télécharger :", footer=f"{len(results)} résultat(s)")
         picked = await ctx.ask_multi_choice(card, [_result_choice(i, results[i]) for i in range(len(results))])
-        chosen = [(results[int(v)].title or "livre", [results[int(v)]]) for v in picked]
+        chosen = [
+            (results[int(v)].title or "livre", [results[int(v)]], BookMeta(language=plan.language))
+            for v in picked
+        ]
 
     if not chosen:
         await ctx.say("🔍 Aucun tome sélectionné. À bientôt !")
@@ -293,9 +311,9 @@ async def _run_batch_downloads(ctx: ClientContext, series_name: str, chosen, des
     total = len(chosen)
     log: list[tuple[bool, str]] = []  # (delivered?, label) in order
     quiet = _QuietContext(ctx)
-    for label, candidates in chosen:
+    for label, candidates, hint in chosen:
         await ctx.update_status(_batch_card(series_name, log, current=label, total=total), _cancel_btn())
-        ok = await _deliver(quiet, candidates, 0, desired_fmt, destination)
+        ok = await _deliver(quiet, candidates, 0, desired_fmt, destination, meta_hint=hint)
         log.append((ok, label))
     # Final frame of the live message (no "in progress" line, no cancel button)…
     await ctx.update_status(_batch_card(series_name, log, current=None, total=total))
@@ -465,8 +483,14 @@ async def _ask_optional_email(ctx: ClientContext, prompt: str) -> str | None:
         await ctx.say("❌ Adresse invalide. Réessaie, ou clique Passer.")
 
 
-async def _deliver(ctx: ClientContext, results, start_idx: int, desired_fmt: str, destination: Destination) -> bool:
-    """Fetch → convert → scan → deliver one book. Returns True if delivered.
+async def _deliver(
+    ctx: ClientContext, results, start_idx: int, desired_fmt: str, destination: Destination,
+    meta_hint: BookMeta | None = None,
+) -> bool:
+    """Fetch → convert → tag metadata → scan → deliver one book. Returns True if delivered.
+
+    ``meta_hint`` carries what the caller already knows (series name + volume number +
+    language in batch mode) so the file lands with clean, correctly-grouped metadata.
 
     In batch mode the caller wraps ``ctx`` in a ``_QuietContext`` so all the
     per-book chatter is silenced and only the bool result drives the global view.
@@ -505,6 +529,15 @@ async def _deliver(ctx: ClientContext, results, start_idx: int, desired_fmt: str
                 logger.warning(f"Conversion to {desired_fmt} failed: {e}")
                 await ctx.say(f"⚠️ Conversion {desired_fmt.upper()} échouée, envoi en EPUB à la place.")
                 send_path, send_ext = file_path, ext
+
+        # Rewrite metadata (title/author/series+number/language/cover) before scan+send.
+        # Best-effort: a tagging failure never blocks delivery.
+        if send_ext in ("epub", "mobi", "azw3"):
+            try:
+                if await metadata.tag(send_path, send_ext, result, meta_hint):
+                    logger.info(f"Metadata tagged: {title[:60]!r}")
+            except Exception as e:
+                logger.warning(f"Metadata tagging failed for {title[:60]!r}: {e}")
 
         vt_caption = await _scan(ctx, send_path, title)
         if vt_caption is None:  # blocked as malicious

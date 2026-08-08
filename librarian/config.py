@@ -43,6 +43,11 @@ ALLOWED_FORMATS: list[str] = [
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://localhost:11434").rstrip("/")
 LLM_MODEL = os.environ.get("LLM_MODEL", "")
 
+# --- Calibre (optional; used for MOBI/AZW3 conversion + metadata rewriting) -
+# Its CLI tools often aren't on PATH (e.g. macOS Calibre.app bundles them). We
+# probe well-known locations automatically; set this to override/point at them.
+CALIBRE_BIN_DIR = os.environ.get("CALIBRE_BIN_DIR", "")
+
 # --- Sources ---------------------------------------------------------------
 ANNA_ARCHIVE_URL = os.environ.get("ANNA_ARCHIVE_URL", "").rstrip("/")
 PROWLARR_URL = os.environ.get("PROWLARR_URL", "").rstrip("/")
