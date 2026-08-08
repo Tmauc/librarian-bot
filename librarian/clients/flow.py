@@ -231,24 +231,32 @@ _LANG_HINTS = {
 }
 
 
-def _fallback_plan(query: str):
-    """A best-effort batch Plan without the LLM: strip the batch/ language phrases and
-    leading articles to recover the series name, and read the language from « en vf » etc.
-    Used when Ollama is down/slow so « l'intégrale de X » still triggers the series flow."""
-    from librarian.core.models import Plan
-
+def _detect_language(query: str) -> str:
     ql = query.lower()
-    language = next((code for code, hints in _LANG_HINTS.items() if any(h in ql for h in hints)), "")
+    return next((code for code, hints in _LANG_HINTS.items() if any(h in ql for h in hints)), "")
+
+
+def _clean_series_query(query: str) -> str:
+    """Recover the bare series name from a request: strip the batch keyword (« intégrale »,
+    « saga »…), the language phrase (« en vf »), and leading French articles. Applied even
+    to the LLM's output, since a small model sometimes leaves « intégrale » in the query."""
     q = query
     for phrase in (*_BATCH_HINTS, "en vf", "en vo", "en français", "en francais", "en anglais",
                    "vf", "vo", "français", "francais", "anglais", "english"):
-        q = re.sub(rf"\b{re.escape(phrase)}\b", " ", q, flags=re.IGNORECASE)
+        q = re.sub(rf"\b{re.escape(phrase)}\w*", " ", q, flags=re.IGNORECASE)  # \w* → stem "intégral"→"intégrale"
     q = re.sub(r"\b[ld]['']", " ", q, flags=re.IGNORECASE)               # l'/d' → space
-    # Strip leading French quantifiers/articles left over (« toute la … », « du … »).
     q = re.sub(r"^\s*(toute?s?\s+(la|le|les)\s+|tous\s+les\s+|de\s+|du\s+|des\s+|la\s+|le\s+|les\s+)+",
                " ", q, flags=re.IGNORECASE)
-    q = re.sub(r"\s+", " ", q).strip(" '\"-")
-    return Plan(query=q or query, language=language, series=True)
+    return re.sub(r"\s+", " ", q).strip(" '\"-")
+
+
+def _fallback_plan(query: str):
+    """A best-effort batch Plan without the LLM (Ollama down/slow): keyword-clean the query
+    + read the language, so « l'intégrale de X » still triggers the series flow."""
+    from librarian.core.models import Plan
+
+    cleaned = _clean_series_query(query)
+    return Plan(query=cleaned or query, language=_detect_language(query), series=True)
 
 
 async def run_search(ctx: ClientContext, query: str) -> None:
@@ -274,6 +282,9 @@ async def run_search(ctx: ClientContext, query: str) -> None:
         if not (p and p.series):
             p = _fallback_plan(query)
             logger.info(f"LLM unavailable → fallback plan for {query!r}: {p}")
+        elif _looks_like_batch(p.query):  # small model left the keyword in → scrub it
+            p.query = _clean_series_query(p.query) or p.query
+            logger.info(f"Scrubbed LLM query → {p.query!r}")
         await _run_batch(ctx, p)
         return
 
@@ -328,10 +339,10 @@ async def _pick_destination(ctx: ClientContext):
 # Smart multi-book (batch)
 # ===========================================================================
 _BATCH_HINTS = (
-    "intégrale", "integrale", "tous les tomes", "toute la série", "toute la serie",
-    "série complète", "serie complete", "collection complète", "collection complete",
-    "saga", "trilogie", "les tomes", "tomes 1", "premiers tomes", "l'ensemble des",
-    "complete series", "all volumes", "whole series",
+    "intégral", "integral",  # stems → match intégral / intégrale / intégrales
+    "tous les tomes", "toute la série", "toute la serie", "série complète", "serie complete",
+    "collection", "coffret", "anthologie", "saga", "trilogie", "les tomes", "tomes 1",
+    "premiers tomes", "l'ensemble", "complete series", "all volumes", "whole series",
 )
 
 

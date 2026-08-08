@@ -244,6 +244,28 @@ def test_fallback_plan_cleans_query_and_reads_language():
     assert _fallback_plan("la trilogie Millénium en anglais").language == "en"
 
 
+def test_batch_hints_cover_stem_and_more_phrasings():
+    from librarian.clients.flow import _looks_like_batch
+
+    assert _looks_like_batch("l'intégral de hunger games")   # 'intégral' without final e
+    assert _looks_like_batch("integral hunger games")        # no accent, no e
+    assert _looks_like_batch("le coffret harry potter")
+    assert _looks_like_batch("toute la collection X")
+    assert _looks_like_batch("l'intégrale épée de la vérité en vf")
+    assert not _looks_like_batch("hunger games tome 2")      # a single volume stays single-search
+    assert not _looks_like_batch("dune")
+
+
+def test_clean_series_query_scrubs_leftover_keyword():
+    """The small LLM sometimes leaves « intégrale » in the query; we scrub it so Wikidata
+    and the catalogue search the bare series name (the Épée de Vérité bug)."""
+    from librarian.clients.flow import _clean_series_query
+
+    assert _clean_series_query("intégrale épée de la vérité") == "épée de la vérité"
+    assert _clean_series_query("L'intégrale d'Hunger games en vf") == "Hunger games"
+    assert _clean_series_query("Hunger Games") == "Hunger Games"  # already clean → untouched
+
+
 def test_batch_triggers_without_llm_via_fallback(monkeypatch):
     """« l'intégrale de X » must still enter series mode when the LLM is down — not fall
     back to a plain 25-result search (the bug the user hit)."""
