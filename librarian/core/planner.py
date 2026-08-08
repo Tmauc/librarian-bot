@@ -19,11 +19,12 @@ _VALID_FORMATS = {"epub", "pdf", "mobi", "azw3"}
 
 _PROMPT = """Tu extrais l'intention d'une demande de livre(s) pour lancer une recherche.
 Réponds UNIQUEMENT en JSON avec ce schéma exact :
-{{"query": "nom du livre ou de la série", "language": "code ISO 639-1 ou \\"\\"", "format": "epub|pdf|mobi|azw3 ou \\"\\"", "series": true|false}}
+{{"query": "nom du livre ou de la série", "author": "auteur ou \\"\\"", "language": "code ISO 639-1 ou \\"\\"", "format": "epub|pdf|mobi|azw3 ou \\"\\"", "series": true|false}}
 
 Règles :
 - "query" = UNIQUEMENT le titre du livre ou le nom de la série, tel qu'il figurerait sur la couverture.
-- ENLÈVE tout le reste : les intentions ("je veux", "trouve-moi"), les mots "l'intégrale de / tous les tomes / saga / coffret", la langue ("en VF", "en anglais"), le FORMAT, et surtout le NOM DE L'AUTEUR.
+- "author" = le nom de l'auteur SI donné, sinon "". Ne le mets JAMAIS dans "query".
+- ENLÈVE de "query" tout le reste : intentions ("je veux", "trouve-moi"), "l'intégrale de / tous les tomes / saga / coffret", la langue ("en VF"), le FORMAT, et l'auteur.
 - N'INVENTE PAS de titres de tomes ; un seul champ "query".
 - series=true si la demande vise une série / intégrale / plusieurs tomes ; sinon false.
 - language : "en VF"/"français" → "fr" ; "en anglais"/"in English" → "en" ; sinon "".
@@ -31,13 +32,13 @@ Règles :
 
 Exemples —
 Demande : "Je veux l'intégrale des chevaliers d'émeraude en VF"
-{{"query": "Les Chevaliers d'Émeraude", "language": "fr", "format": "", "series": true}}
+{{"query": "Les Chevaliers d'Émeraude", "author": "", "language": "fr", "format": "", "series": true}}
 Demande : "je veux l'intégrale de Dune de Frank Herbert"
-{{"query": "Dune", "language": "", "format": "", "series": true}}
+{{"query": "Dune", "author": "Frank Herbert", "language": "", "format": "", "series": true}}
 Demande : "dune de frank herbert en epub"
-{{"query": "Dune", "language": "", "format": "epub", "series": false}}
+{{"query": "Dune", "author": "Frank Herbert", "language": "", "format": "epub", "series": false}}
 Demande : "l'intégrale épée de la vérité en vf"
-{{"query": "L'Épée de vérité", "language": "fr", "format": "", "series": true}}
+{{"query": "L'Épée de vérité", "author": "", "language": "fr", "format": "", "series": true}}
 
 Demande : "{request}"
 """
@@ -82,4 +83,5 @@ def _to_plan(data: dict) -> Plan | None:
         language=str(data.get("language", "")).strip().lower()[:5],
         desired_format=fmt if fmt in _VALID_FORMATS else "",
         series=bool(data.get("series")),
+        author=str(data.get("author", "")).strip()[:100],
     )

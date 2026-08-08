@@ -50,3 +50,7 @@ class Plan:
     language: str = ""
     desired_format: str = ""
     series: bool = False
+    # The author, kept SEPARATE from ``query`` (which stays the bare series name so the
+    # Wikidata lookup works). Used only to disambiguate same-named series — e.g. Dune by
+    # Frank Herbert (the 6 originals) vs the Brian Herbert prequels.
+    author: str = ""

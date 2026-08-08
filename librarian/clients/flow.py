@@ -388,7 +388,7 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
     in the catalogue (in the requested language), and let the user multi-select the tomes.
     Falls back to raw catalogue results if the series is unknown to Wikidata."""
     await ctx.say(f"🔎 Identification de « {plan.query} »…")
-    vols = await series.volumes(plan.query, plan.language or "fr")
+    vols = await series.volumes(plan.query, plan.language or "fr", plan.author)
     entries = await _series_entries(ctx, plan, vols) if vols else []
 
     if entries:  # clean, ordered "Tome N — title" → several candidate editions

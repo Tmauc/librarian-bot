@@ -216,7 +216,7 @@ def test_batch_fallback_multiselect(monkeypatch):
     async def fake_plan(request):
         return Plan(query="Ma série", series=True, desired_format="epub")
 
-    async def no_vols(name, language="fr"):
+    async def no_vols(name, language="fr", author=""):
         return []
 
     async def scenario():
@@ -271,7 +271,7 @@ def test_batch_triggers_without_llm_via_fallback(monkeypatch):
     back to a plain 25-result search (the bug the user hit)."""
     from librarian.core import planner, series
 
-    async def no_vols(name, language="fr"):
+    async def no_vols(name, language="fr", author=""):
         return []
 
     async def scenario():
@@ -297,7 +297,7 @@ def test_batch_series_from_wikidata(monkeypatch):
     async def fake_plan(request):
         return Plan(query="Ma série", series=True, desired_format="epub")
 
-    async def fake_vols(name, language="fr"):
+    async def fake_vols(name, language="fr", author=""):
         return [(1, "Alpha"), (2, "Beta")]
 
     class SeriesStub(Source):
@@ -339,7 +339,7 @@ def test_batch_falls_back_across_editions(monkeypatch):
     async def fake_plan(request):
         return Plan(query="Ma série", series=True, desired_format="epub")
 
-    async def fake_vols(name, language="fr"):
+    async def fake_vols(name, language="fr", author=""):
         return [(1, "Alpha")]
 
     class FlakySource(Source):

@@ -60,6 +60,15 @@ def test_missing_ordinal_is_none(monkeypatch):
     assert asyncio.run(series.volumes("x")) == [(None, "A"), (None, "B"), (None, "C")]
 
 
+def test_author_filter_requires_every_name_word():
+    from librarian.core.series import _author_filter
+
+    f = _author_filter("Frank Herbert")
+    assert "wdt:P50" in f
+    assert 'CONTAINS(LCASE(STR(?authL)), "frank")' in f and '"herbert")' in f  # both words required
+    assert _author_filter("") == ""  # no author → no filter
+
+
 def test_empty_name_returns_empty():
     assert asyncio.run(series.volumes("   ")) == []
 

@@ -6,6 +6,7 @@ series name we resolve the series entity and return its ordered volume titles (P
 """
 
 import logging
+import re
 
 import httpx
 
@@ -23,11 +24,13 @@ _API = "https://www.wikidata.org/w/api.php"
 _SPARQL = "https://query.wikidata.org/sparql"
 
 
-async def volumes(name: str, language: str = "fr") -> list[tuple[int | None, str]]:
+async def volumes(name: str, language: str = "fr", author: str = "") -> list[tuple[int | None, str]]:
     """Return the series' ordered volumes as ``(ordinal, title)`` pairs (or []).
 
     ``ordinal`` is the volume number (P1545) when Wikidata has it, else None.
-    Labels are requested in ``language`` first (fallback English).
+    Labels are requested in ``language`` first (fallback English). ``author`` (optional)
+    disambiguates same-named series — only volumes written by that author are kept; if the
+    author matches nothing we ignore it rather than return empty.
     """
     if not name.strip():
         return []
@@ -45,49 +48,54 @@ async def volumes(name: str, language: str = "fr") -> list[tuple[int | None, str
             resp.raise_for_status()
             candidates = [r["id"] for r in resp.json().get("search", []) if r.get("id", "").startswith("Q")]
 
-            best: list[tuple[int | None, str]] = []
-            for qid in candidates:
-                vols = await _parts(client, qid, language)
-                if len(vols) > len(best):
-                    best = vols
-                if len(best) >= 3:  # a real series — good enough, stop early
-                    break
+            best = await _best_over(client, candidates, language, author)
+            if not best and author:  # the author didn't match Wikidata → drop the filter
+                best = await _best_over(client, candidates, language, "")
             return best
     except Exception as e:
         logger.warning(f"Wikidata series lookup failed for {name!r}: {e}")
         return []
 
 
-async def _parts(client: httpx.AsyncClient, qid: str, language: str) -> list[tuple[int | None, str]]:
-    """Ordered book volumes for a candidate entity. The candidate may BE the series, or —
-    for an ambiguous name like « Dune » where wbsearch returns the first novel, not the
-    series — it may be a book that is *part of* the series (P179). So we try qid as the
-    series first, then follow qid's own P179 to the series it belongs to."""
-    direct = await _members(client, qid, language)
-    if direct:
-        return direct
-    for series_qid in await _series_of(client, qid):
-        members = await _members(client, series_qid, language)
-        if members:
-            return members
-    return []
+async def _best_over(client, candidates, language, author) -> list[tuple[int | None, str]]:
+    """The longest volume list across the candidate entities (stops at the first solid
+    series ≥ 3 volumes)."""
+    best: list[tuple[int | None, str]] = []
+    for qid in candidates:
+        vols = await _members(client, qid, language, author)
+        if len(vols) > len(best):
+            best = vols
+        if len(best) >= 3:  # a real series — good enough, stop early
+            break
+    return best
 
 
-async def _series_of(client: httpx.AsyncClient, qid: str) -> list[str]:
-    """The series this entity is part of (P179) — e.g. the Dune novel → the Dune series."""
-    query = f"SELECT ?s WHERE {{ wd:{qid} wdt:P179 ?s . }}"
-    resp = await client.get(_SPARQL, params={"query": query, "format": "json"})
-    resp.raise_for_status()
-    return [b["s"]["value"].rsplit("/", 1)[-1] for b in resp.json()["results"]["bindings"]]
+def _author_filter(author: str) -> str:
+    """A SPARQL fragment requiring the volume's author (P50) label to contain every word
+    of ``author`` (so « Frank Herbert » ≠ « Brian Herbert »). Empty if no author."""
+    words = [w for w in re.split(r"\s+", author.strip()) if len(w) > 1]
+    if not words:
+        return ""
+    conds = " && ".join(
+        f'CONTAINS(LCASE(STR(?authL)), "{w.lower().replace(chr(92), "").replace(chr(34), "")}")'
+        for w in words
+    )
+    return f"?vol wdt:P50 ?auth . ?auth rdfs:label ?authL . FILTER({conds})"
 
 
-async def _members(client: httpx.AsyncClient, qid: str, language: str) -> list[tuple[int | None, str]]:
+async def _members(client, qid, language, author="") -> list[tuple[int | None, str]]:
+    """Ordered book volumes for a candidate in ONE query. ``qid`` may BE the series, or —
+    for an ambiguous name like « Dune » where wbsearch returns the first novel — a book
+    that is *part of* the series: ``wd:qid wdt:P179? ?s`` resolves ?s to qid itself OR the
+    series qid belongs to, so both cases are covered without extra round-trips."""
     langs = f"{language},en" if language and language != "en" else "en"
     query = (
         "SELECT ?vol ?volLabel ?ord WHERE {"
-        f"  ?vol wdt:P179 wd:{qid} ."
-        f"  ?vol wdt:P31/wdt:P279* {_WRITTEN_WORK} ."  # books only — exclude films/games/…
-        f"  OPTIONAL {{ ?vol p:P179 [ ps:P179 wd:{qid} ; pq:P1545 ?ord ] }}"
+        f"  wd:{qid} wdt:P179? ?s ."                    # ?s = qid, or the series qid is part of
+        "  ?vol wdt:P179 ?s ."
+        f"  ?vol wdt:P31/wdt:P279* {_WRITTEN_WORK} ."   # books only — exclude films/games/…
+        f"  {_author_filter(author)}"
+        "  OPTIONAL { ?vol p:P179 [ ps:P179 ?s ; pq:P1545 ?ord ] }"
         f'  SERVICE wikibase:label {{ bd:serviceParam wikibase:language "{langs}". }}'
         "} ORDER BY xsd:integer(?ord)"
     )
