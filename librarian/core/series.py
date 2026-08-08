@@ -36,8 +36,10 @@ async def volumes(name: str, language: str = "fr") -> list[tuple[int | None, str
             resp = await client.get(
                 _API,
                 params={
+                    # Look past the top hits: for an ambiguous name (« Dune ») the film /
+                    # game / landform rank above the novel we actually want.
                     "action": "wbsearchentities", "search": name,
-                    "language": language or "en", "format": "json", "limit": 5,
+                    "language": language or "en", "format": "json", "limit": 12,
                 },
             )
             resp.raise_for_status()
@@ -57,6 +59,29 @@ async def volumes(name: str, language: str = "fr") -> list[tuple[int | None, str
 
 
 async def _parts(client: httpx.AsyncClient, qid: str, language: str) -> list[tuple[int | None, str]]:
+    """Ordered book volumes for a candidate entity. The candidate may BE the series, or —
+    for an ambiguous name like « Dune » where wbsearch returns the first novel, not the
+    series — it may be a book that is *part of* the series (P179). So we try qid as the
+    series first, then follow qid's own P179 to the series it belongs to."""
+    direct = await _members(client, qid, language)
+    if direct:
+        return direct
+    for series_qid in await _series_of(client, qid):
+        members = await _members(client, series_qid, language)
+        if members:
+            return members
+    return []
+
+
+async def _series_of(client: httpx.AsyncClient, qid: str) -> list[str]:
+    """The series this entity is part of (P179) — e.g. the Dune novel → the Dune series."""
+    query = f"SELECT ?s WHERE {{ wd:{qid} wdt:P179 ?s . }}"
+    resp = await client.get(_SPARQL, params={"query": query, "format": "json"})
+    resp.raise_for_status()
+    return [b["s"]["value"].rsplit("/", 1)[-1] for b in resp.json()["results"]["bindings"]]
+
+
+async def _members(client: httpx.AsyncClient, qid: str, language: str) -> list[tuple[int | None, str]]:
     langs = f"{language},en" if language and language != "en" else "en"
     query = (
         "SELECT ?vol ?volLabel ?ord WHERE {"

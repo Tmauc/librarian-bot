@@ -17,22 +17,27 @@ logger = logging.getLogger(__name__)
 
 _VALID_FORMATS = {"epub", "pdf", "mobi", "azw3"}
 
-_PROMPT = """Tu extrais l'intention d'une demande de livre(s), pour lancer une recherche.
+_PROMPT = """Tu extrais l'intention d'une demande de livre(s) pour lancer une recherche.
 Réponds UNIQUEMENT en JSON avec ce schéma exact :
-{{"query": "termes de recherche propres", "language": "code ISO 639-1 ou \\"\\"", "format": "epub|pdf|mobi|azw3 ou \\"\\"", "series": true|false}}
+{{"query": "nom du livre ou de la série", "language": "code ISO 639-1 ou \\"\\"", "format": "epub|pdf|mobi|azw3 ou \\"\\"", "series": true|false}}
 
 Règles :
-- "query" = le nom de la série ou du livre (+ l'auteur si donné), SANS les mots parasites ("je veux", "l'intégrale de", "en VF", "tous les tomes"…). Juste de quoi chercher dans un catalogue.
-- N'INVENTE PAS de titres de tomes. Ne mets qu'un seul champ "query".
+- "query" = UNIQUEMENT le titre du livre ou le nom de la série, tel qu'il figurerait sur la couverture.
+- ENLÈVE tout le reste : les intentions ("je veux", "trouve-moi"), les mots "l'intégrale de / tous les tomes / saga / coffret", la langue ("en VF", "en anglais"), le FORMAT, et surtout le NOM DE L'AUTEUR.
+- N'INVENTE PAS de titres de tomes ; un seul champ "query".
 - series=true si la demande vise une série / intégrale / plusieurs tomes ; sinon false.
-- Déduis la langue si mentionnée ("en VF"/"français" → "fr", "in English" → "en").
-- N'ajoute aucun texte hors du JSON.
+- language : "en VF"/"français" → "fr" ; "en anglais"/"in English" → "en" ; sinon "".
+- Aucun texte hors du JSON.
 
 Exemples —
 Demande : "Je veux l'intégrale des chevaliers d'émeraude en VF"
 {{"query": "Les Chevaliers d'Émeraude", "language": "fr", "format": "", "series": true}}
+Demande : "je veux l'intégrale de Dune de Frank Herbert"
+{{"query": "Dune", "language": "", "format": "", "series": true}}
 Demande : "dune de frank herbert en epub"
-{{"query": "Dune Frank Herbert", "language": "", "format": "epub", "series": false}}
+{{"query": "Dune", "language": "", "format": "epub", "series": false}}
+Demande : "l'intégrale épée de la vérité en vf"
+{{"query": "L'Épée de vérité", "language": "fr", "format": "", "series": true}}
 
 Demande : "{request}"
 """

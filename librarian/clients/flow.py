@@ -241,6 +241,10 @@ def _clean_series_query(query: str) -> str:
     « saga »…), the language phrase (« en vf »), and leading French articles. Applied even
     to the LLM's output, since a small model sometimes leaves « intégrale » in the query."""
     q = query
+    # Leading intent phrases (« je veux … », « trouve-moi … »).
+    q = re.sub(r"^\s*(je\s+veux|je\s+voudrais|j['']aimerais|je\s+cherche|il\s+me\s+faut|"
+               r"trouve[\s-]?moi|donne[\s-]?moi|télécharge[\s-]?moi|"
+               r"peux[\s-]?tu\s+(me\s+)?(trouver|télécharger))\s+", " ", q, flags=re.IGNORECASE)
     for phrase in (*_BATCH_HINTS, "en vf", "en vo", "en français", "en francais", "en anglais",
                    "vf", "vo", "français", "francais", "anglais", "english"):
         q = re.sub(rf"\b{re.escape(phrase)}\w*", " ", q, flags=re.IGNORECASE)  # \w* → stem "intégral"→"intégrale"
