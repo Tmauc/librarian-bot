@@ -49,16 +49,17 @@ async def search(query: str, max_file_size: int = 0) -> list[SearchResult]:
     if max_file_size:
         ordered = [r for r in ordered if not (r.size_bytes and r.size_bytes > max_file_size)]
 
-    # Deduplicate by full normalized title (keeps distinct series volumes, removes
-    # genuine intra-source duplicates), cap at MAX_RESULTS.
+    # Deduplicate by FILE identity (md5 when the source has it, else normalized title):
+    # this keeps genuinely distinct editions of the same title — different translation,
+    # publisher, year, size — so the user can compare and choose. Cap at MAX_RESULTS.
     seen: set[str] = set()
     out: list[SearchResult] = []
     for r in ordered:
-        norm = _normalize_title(r.title)
-        if norm and norm in seen:
+        key = (r.ref or {}).get("md5") or _normalize_title(r.title)
+        if key and key in seen:
             continue
-        if norm:
-            seen.add(norm)
+        if key:
+            seen.add(key)
         out.append(r)
         if len(out) >= config.MAX_RESULTS:
             break

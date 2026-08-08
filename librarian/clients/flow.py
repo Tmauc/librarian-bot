@@ -40,6 +40,26 @@ logger = logging.getLogger(__name__)
 _EMAIL_RE = re.compile(r"^[^@\s`]+@[^@\s`]+\.[^@\s`]+$")
 _FMT_LABELS = {"epub": "📥 EPUB", "pdf": "📄 PDF", "mobi": "📱 MOBI", "azw3": "📘 AZW3"}
 
+# Which edition to auto-pick per tome in a series batch (applied as the last tie-break,
+# after language/format/tome-number). Per-user pref « edition_pref ».
+_EDITION_PREFS = {
+    "quality": "📖 Qualité (plus gros fichier)",
+    "light": "🪶 Léger (plus petit fichier)",
+    "recent": "🆕 Récent (année la plus récente)",
+}
+DEFAULT_EDITION = "quality"
+
+
+def _edition_score(r, edition: str) -> int:
+    """Higher = preferred, per the edition strategy. Used as a tie-break."""
+    size = r.size_bytes or 0
+    year = int(r.year) if (r.year or "").isdigit() else 0
+    if edition == "light":
+        return -(size or 10**12)   # smaller first; unknown size sinks to the bottom
+    if edition == "recent":
+        return year
+    return size                    # quality: bigger first
+
 
 def _is_valid_email(value: str) -> bool:
     return len(value) <= 254 and bool(_EMAIL_RE.match(value))
@@ -98,9 +118,11 @@ async def run_settings(ctx: ClientContext) -> None:
     while True:
         p = await prefs.get(ctx.user_key)
         has_cloud = any(d.name in ("dropbox", "gdrive") for d in await destinations.available_for(ctx))
+        edition = p.get("edition_pref", DEFAULT_EDITION)
         text = (
             "⚙️ Vos préférences :\n\n"
             f"• Format : {p.get('format', 'epub').upper()}\n"
+            f"• Édition (séries) : {_EDITION_PREFS.get(edition, _EDITION_PREFS[DEFAULT_EDITION])}\n"
             f"• Email : {p.get('email', 'non configuré')}\n"
             f"• Kindle : {p.get('kindle_email', 'non configuré')}"
         )
@@ -109,6 +131,7 @@ async def run_settings(ctx: ClientContext) -> None:
             text += f"\n• Rangement cloud : {SORT_SCHEMES.get(scheme, SORT_SCHEMES[DEFAULT_SORT_SCHEME])}"
         options = [
             Choice("📚 Format", "fmt"),
+            Choice("📖 Édition (séries)", "edition"),
             Choice("📧 Email", "email"),
             Choice("📖 Kindle", "kindle"),
         ]
@@ -138,6 +161,13 @@ async def run_settings(ctx: ClientContext) -> None:
         elif choice == "reorg":
             scheme = (await prefs.get(ctx.user_key)).get("sort_scheme", DEFAULT_SORT_SCHEME)
             await _reorganize_cloud(ctx, scheme)
+        elif choice == "edition":
+            pref = await ctx.ask_choice(
+                "📖 Pour les séries, quelle édition privilégier par tome ?",
+                [Choice(label, key) for key, label in _EDITION_PREFS.items()],
+                cancellable=False,
+            )
+            await prefs.set(ctx.user_key, "edition_pref", pref)
         elif choice == "fmt":
             fmt = await ctx.ask_choice(
                 "📚 Quel format préfères-tu ?",
@@ -390,11 +420,12 @@ async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
     has but Wikidata missed. Returns ordered ``(number, title, [results])`` tuples."""
     lang = plan.language
     fmt = plan.desired_format if plan.desired_format in config.ALLOWED_FORMATS else config.ALLOWED_FORMATS[0]
+    edition = (await prefs.get(ctx.user_key)).get("edition_pref", DEFAULT_EDITION)
     searches = await asyncio.gather(*[_search_volume(ctx, plan.query, num, title) for num, title in vols])
     entries: list[tuple] = []
     covered: set[int] = set()
     for (num, title), results in zip(vols, searches, strict=True):
-        cands = _best_matches(title, num, results, lang, fmt)
+        cands = _best_matches(title, num, results, lang, fmt, edition)
         if cands:
             entries.append((num, title, cands))
             if num is not None:
@@ -453,11 +484,13 @@ async def _search_volume(ctx: ClientContext, series_name: str, num: int | None, 
     return list(merged.values())
 
 
-def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: str = "", limit: int = 5):
+def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: str = "",
+                  edition: str = DEFAULT_EDITION, limit: int = 5):
     """Up to ``limit`` plausible editions of a volume. A candidate is plausible if it
     carries the right tome number OR shares a distinctive word with the sub-title. Ranked
     so the requested language, then format, then an explicit tome-number match come first
-    (e.g. a French EPUB « … tome 1 » before an English EPUB). Empty if none plausible."""
+    (e.g. a French EPUB « … tome 1 » before an English EPUB), with the ``edition`` strategy
+    (quality/light/recent) as the final tie-break. Empty if none plausible."""
     words = {w for w in re.sub(r"[^\w]", " ", vol.lower()).split() if len(w) > 3}
 
     def num_ok(r) -> bool:
@@ -468,10 +501,10 @@ def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: s
 
     matches = [r for r in results if plausible(r)]
 
-    def rank(r) -> tuple[int, int, int]:
+    def rank(r) -> tuple[int, int, int, int]:
         lang_ok = bool(language and r.language and _lang_match(r.language, language))
         fmt_ok = bool(fmt and r.ext == fmt)
-        return (int(lang_ok), int(fmt_ok), int(num_ok(r)))
+        return (int(lang_ok), int(fmt_ok), int(num_ok(r)), _edition_score(r, edition))
 
     matches.sort(key=rank, reverse=True)  # stable → keeps catalogue order within a tier
     return matches[:limit]

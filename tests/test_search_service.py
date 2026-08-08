@@ -64,6 +64,19 @@ def test_a_failing_source_does_not_break_search():
     assert [r.title for r in res] == ["Neuromancer"]
 
 
+def test_distinct_editions_same_title_are_kept_by_md5():
+    """Two editions of the same title (different md5) both survive → the user can choose."""
+    registry._ALL[:] = [
+        _Stub("a", [
+            SearchResult("a", "Hunger Games, tome 1", "epub", size_bytes=300_000, ref={"md5": "aaa"}),
+            SearchResult("a", "Hunger Games, tome 1", "epub", size_bytes=1_300_000, ref={"md5": "bbb"}),
+            SearchResult("a", "Hunger Games, tome 1", "epub", ref={"md5": "aaa"}),  # true dup → dropped
+        ]),
+    ]
+    res = asyncio.run(search_service.search("x"))
+    assert [r.ref["md5"] for r in res] == ["aaa", "bbb"]
+
+
 def test_distinct_series_volumes_are_kept():
     registry._ALL[:] = [
         _Stub("a", [

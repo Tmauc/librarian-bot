@@ -21,11 +21,16 @@ See also: [architecture](architecture.md) · [configuration](configuration.md).
    volumes to **written works** (`P31/P279*` literary work), so film/game adaptations in
    the same series are never offered as tomes (e.g. the Hunger Games *films*, one split
    into « La Révolte partie 1/2 », are excluded — only the books remain).
-3. Each canonical volume is searched in the **real catalogue** (Anna's Archive); candidate
-   editions are ranked so the **requested language and format come first** (e.g. a French
-   EPUB before an English PDF), and an EPUB target never delivers a non-EPUB. Volumes that
-   resolve to a file an earlier volume already claimed are de-duplicated. A volume matching
-   nothing is dropped.
+3. Each canonical volume is searched in the **real catalogue** (Anna's Archive) — both by
+   sub-title and by « série tome N » (French editions are titled that way). Candidate editions
+   are ranked so the **requested language and format come first** (e.g. a French EPUB before an
+   English PDF), then an explicit tome-number match, then the user's **edition preference**
+   (`/settings` → *Édition (séries)*: `quality` = biggest file, `light` = smallest, `recent` =
+   newest year). An EPUB target never delivers a non-EPUB. Volumes resolving to a file an earlier
+   volume already claimed are de-duplicated; a volume matching nothing is dropped.
+
+   (In a plain single-title search the user picks the edition themselves — the result list keeps
+   distinct editions, de-duplicated by file/md5 rather than by title, with year·size·format shown.)
 4. The user **multi-selects** which tomes to download from that clean ordered list; each
    volume carries several **candidate editions**, so a dead mirror falls back to the next
    edition instead of failing the tome. A batch downloads under **one live message**: a
