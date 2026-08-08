@@ -35,17 +35,29 @@ def _install(monkeypatch, api, sparql):
     monkeypatch.setattr(series.httpx, "AsyncClient", lambda *a, **k: _FakeClient(api, sparql))
 
 
-def _sparql_rows(labels):
-    return {"results": {"bindings": [{"volLabel": {"value": v}} for v in labels]}}
+def _sparql_rows(rows):
+    # rows: list of (ord|None, label)
+    out = []
+    for ordv, label in rows:
+        b = {"volLabel": {"value": label}}
+        if ordv is not None:
+            b["ord"] = {"value": str(ordv)}
+        out.append(b)
+    return {"results": {"bindings": out}}
 
 
-def test_volumes_from_wikidata(monkeypatch):
+def test_volumes_from_wikidata_with_ordinals(monkeypatch):
     _install(
         monkeypatch,
         {"search": [{"id": "Q1"}]},
-        _sparql_rows(["Le Feu dans le ciel", "Les Dragons", "Irianeth"]),
+        _sparql_rows([(1, "Le Feu dans le ciel"), (3, "Piège"), (12, "Irianeth")]),
     )
-    assert asyncio.run(series.volumes("Les Chevaliers")) == ["Le Feu dans le ciel", "Les Dragons", "Irianeth"]
+    assert asyncio.run(series.volumes("Les Chevaliers")) == [(1, "Le Feu dans le ciel"), (3, "Piège"), (12, "Irianeth")]
+
+
+def test_missing_ordinal_is_none(monkeypatch):
+    _install(monkeypatch, {"search": [{"id": "Q1"}]}, _sparql_rows([(None, "A"), (None, "B"), (None, "C")]))
+    assert asyncio.run(series.volumes("x")) == [(None, "A"), (None, "B"), (None, "C")]
 
 
 def test_empty_name_returns_empty():
@@ -57,6 +69,10 @@ def test_no_candidates(monkeypatch):
     assert asyncio.run(series.volumes("inconnu")) == []
 
 
-def test_skips_unlabelled_qid_volumes(monkeypatch):
-    _install(monkeypatch, {"search": [{"id": "Q1"}]}, _sparql_rows(["Vrai Tome", "Q4567", "Autre Tome"]))
-    assert asyncio.run(series.volumes("x")) == ["Vrai Tome", "Autre Tome"]
+def test_skips_unlabelled_qid_and_dupes(monkeypatch):
+    _install(
+        monkeypatch,
+        {"search": [{"id": "Q1"}]},
+        _sparql_rows([(1, "Vrai Tome"), (2, "Q4567"), (3, "Autre Tome"), (4, "vrai tome")]),
+    )
+    assert asyncio.run(series.volumes("x")) == [(1, "Vrai Tome"), (3, "Autre Tome")]

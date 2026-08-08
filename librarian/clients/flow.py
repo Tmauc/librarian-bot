@@ -199,23 +199,51 @@ def _looks_like_batch(query: str) -> bool:
     return any(h in ql for h in _BATCH_HINTS)
 
 
+_LANG_NAMES = {
+    "fr": ("fr", "franç", "francais", "french"),
+    "en": ("en", "english", "anglais"),
+    "es": ("es", "español", "espagnol", "spanish"),
+    "de": ("de", "deutsch", "allemand", "german"),
+    "it": ("it", "italien", "italiano", "italian"),
+}
+
+
+def _lang_match(result_language: str, code: str) -> bool:
+    rl = (result_language or "").lower()
+    return any(rl.startswith(p) for p in _LANG_NAMES.get(code, (code,)))
+
+
+def _detect_tome(title: str) -> int | None:
+    """Best-effort volume number from a catalogue title (tome N / TNN / (… N))."""
+    t = title.lower()
+    for pat in (r"\btome\s*0*(\d{1,2})\b", r"\bt0*(\d{1,2})\b", r"\(.*?\b0*(\d{1,2})\s*\)", r"[-–:]\s*0*(\d{1,2})\s*[-–:]"):
+        m = re.search(pat, t)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _vol_label(num: int | None, title: str) -> str:
+    return f"Tome {num} — {title}"[:100] if num is not None else title[:100]
+
+
 async def _run_batch(ctx: ClientContext, plan) -> None:
-    """Identify the series (Wikidata → canonical ordered volumes), find each volume's
-    file in the catalogue, and let the user multi-select which tomes to download. Falls
-    back to raw catalogue results if the series is unknown to Wikidata."""
+    """Identify the series (Wikidata → canonical ordered volumes), find each volume's file
+    in the catalogue (in the requested language), and let the user multi-select the tomes.
+    Falls back to raw catalogue results if the series is unknown to Wikidata."""
     await ctx.say(f"🔎 Identification de « {plan.query} »…")
-    vols = await series.volumes(plan.query)
+    vols = await series.volumes(plan.query, plan.language or "fr")
     entries = await _series_entries(ctx, plan, vols) if vols else []
 
-    if entries:  # clean, ordered "Tome N: real file"
-        choices = [Choice(f"{i + 1}. {label}", str(i), description=_meta_line(r)) for i, (label, r) in enumerate(entries)]
+    if entries:  # clean, ordered "Tome N — title" → real file
+        choices = [Choice(_vol_label(n, t), str(i), description=_meta_line(r)) for i, (n, t, r) in enumerate(entries)]
         card = Card(
             title=f"🧠 {plan.query}",
             description=f"{len(entries)} tome(s) trouvé(s) — coche ceux à télécharger :",
-            footer="Série identifiée via Wikidata",
+            footer="Série identifiée via Wikidata + catalogue",
         )
         picked = await ctx.ask_multi_choice(card, choices)
-        chosen = [entries[int(v)][1] for v in picked]
+        chosen = [entries[int(v)][2] for v in picked]
     else:  # fallback: unknown series → raw catalogue, user sorts it out
         await ctx.say(f"🔎 Recherche de « {plan.query} »…")
         results = await search_service.search(plan.query, ctx.max_file_size)
@@ -240,31 +268,48 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
     await ctx.say(f"✅ Terminé — {done} livre(s) livré(s).")
 
 
-async def _series_entries(ctx: ClientContext, plan, vols: list[str]):
-    """For each canonical volume, find the best matching catalogue file. Volumes with no
-    plausible match (e.g. Wikidata noise: prologues, foreign-language editions) are dropped."""
+async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
+    """Map each canonical volume to the best catalogue file (preferring the requested
+    language), then backfill any numbered tome the catalogue has but Wikidata missed.
+    Returns ordered ``(number, title, result)`` tuples."""
+    lang = plan.language
     searches = await asyncio.gather(
-        *[search_service.search(f"{plan.query} {v}", ctx.max_file_size) for v in vols]
+        *[search_service.search(f"{plan.query} {title}", ctx.max_file_size) for _, title in vols]
     )
-    entries = []
-    for v, results in zip(vols, searches, strict=True):
-        r = _best_match(v, results)
+    entries: list[tuple] = []
+    covered: set[int] = set()
+    for (num, title), results in zip(vols, searches, strict=True):
+        r = _best_match(title, results, lang)
         if r:
-            entries.append((v, r))
+            entries.append((num, title, r))
+            if num is not None:
+                covered.add(num)
+
+    # Backfill: numbered tomes present in the catalogue but missing from Wikidata (data gaps).
+    for r in await search_service.search(plan.query, ctx.max_file_size):
+        if lang and r.language and not _lang_match(r.language, lang):
+            continue
+        num = _detect_tome(r.title)
+        if num is not None and num not in covered:
+            covered.add(num)
+            entries.append((num, r.title, r))
+
+    entries.sort(key=lambda e: (e[0] is None, e[0] if e[0] is not None else 0))
     return entries
 
 
-def _best_match(vol: str, results):
-    """Top result whose title shares a distinctive word with the volume title, else None."""
-    if not results:
-        return None
+def _best_match(vol: str, results, language: str = ""):
+    """Top result sharing a distinctive word with the volume title, preferring the
+    requested language; None if nothing plausible."""
     words = {w for w in re.sub(r"[^\w]", " ", vol.lower()).split() if len(w) > 3}
-    if not words:
-        return results[0]
-    for r in results[:5]:
-        if any(w in r.title.lower() for w in words):
-            return r
-    return None
+    matches = [r for r in results[:8] if not words or any(w in r.title.lower() for w in words)]
+    if not matches:
+        return None
+    if language:
+        preferred = [r for r in matches if r.language and _lang_match(r.language, language)]
+        if preferred:
+            return preferred[0]
+    return matches[0]
 
 
 # ===========================================================================

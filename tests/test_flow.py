@@ -180,7 +180,7 @@ def test_batch_fallback_multiselect(monkeypatch):
     async def fake_plan(request):
         return Plan(query="Ma série", series=True, desired_format="epub")
 
-    async def no_vols(name):
+    async def no_vols(name, language="fr"):
         return []
 
     async def scenario():
@@ -207,8 +207,8 @@ def test_batch_series_from_wikidata(monkeypatch):
     async def fake_plan(request):
         return Plan(query="Ma série", series=True, desired_format="epub")
 
-    async def fake_vols(name):
-        return ["Alpha", "Beta"]
+    async def fake_vols(name, language="fr"):
+        return [(1, "Alpha"), (2, "Beta")]
 
     class SeriesStub(Source):
         name = "stub"
