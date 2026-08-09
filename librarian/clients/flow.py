@@ -16,6 +16,7 @@ import time
 import unicodedata
 import zipfile
 from collections import Counter
+from itertools import zip_longest
 
 from librarian import config
 from librarian.clients.base import CANCEL, SKIP, Card, Choice, ClientContext
@@ -633,7 +634,17 @@ def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: s
         return (int(author_ok), int(lang_ok), int(fmt_ok), int(num_ok(r)), _edition_score(r, edition))
 
     matches.sort(key=rank, reverse=True)  # stable → keeps catalogue order within a tier
-    return matches[:limit]
+    # Guarantee edition diversity. Systematic « Série, Tome N — … » uploads frequently have NO
+    # free libgen mirror (only Anna's membership/DDoS-gated endpoints), while the classic
+    # sub-title editions usually do. num_ok ranks the former first, so without interleaving they
+    # monopolise every slot and the download fallback never reaches a downloadable edition (this
+    # is exactly why « Le Seigneur des trois règnes » T7 failed while an alt edition had a mirror).
+    # Interleave the two kinds — each kept in its ranked order — so a mirror-backed sub-title
+    # edition is among the first candidates tried.
+    tome = [r for r in matches if num_ok(r)]
+    sub = [r for r in matches if not num_ok(r)]
+    interleaved = [r for pair in zip_longest(tome, sub) for r in pair if r is not None]
+    return interleaved[:limit]
 
 
 # ===========================================================================
