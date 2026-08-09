@@ -611,12 +611,18 @@ async def _search_volume(ctx: ClientContext, series_name: str, num: int | None, 
 
 
 def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: str = "",
-                  author: str = "", edition: str = DEFAULT_EDITION, limit: int = 7):
+                  author: str = "", edition: str = DEFAULT_EDITION, limit: int = 16):
     """Up to ``limit`` plausible editions of a volume. A candidate is plausible if it
     carries the right tome number OR shares a distinctive word with the sub-title. Ranked:
     the requested AUTHOR first (« Dune » by Frank Herbert before « Avant Dune » by Brian
     Herbert), then language, format, an explicit tome-number match, and finally the
-    ``edition`` strategy (quality/light/recent). Empty if none plausible."""
+    ``edition`` strategy (quality/light/recent). Empty if none plausible.
+
+    ``limit`` is deliberately generous: many catalogue editions are dead (gated mirror) or
+    even CORRUPT (a few « … : roman » uploads are Office docs served as .epub — rejected by
+    ``_looks_like_epub`` after download). The download fallback tries candidates in order, so
+    it needs enough of them to reach a genuine, downloadable EPUB (Aventuriers de la Mer T7
+    had 10 valid editions among 45, but only mirror-less/corrupt ones fit in the old top-7)."""
     words = {w for w in re.sub(r"[^\w]", " ", vol.lower()).split() if len(w) > 3}
 
     def num_ok(r) -> bool:
