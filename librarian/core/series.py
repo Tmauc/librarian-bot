@@ -94,37 +94,67 @@ async def _members(client, qid, language, author="") -> tuple[list[tuple[int | N
     """Ordered book volumes (+ the series' canonical author) for a candidate, in ONE query.
     ``qid`` may BE the series, or — for an ambiguous name like « Dune » where wbsearch
     returns the first novel — a book *part of* the series: ``wd:qid wdt:P179? ?s`` resolves
-    ?s to qid itself OR the series qid belongs to."""
+    ?s to qid itself OR the series qid belongs to.
+
+    A series is linked to its volumes in either direction on Wikidata: volume → series via
+    P179 (« part of the series »), or series → volume via P527 (« has part »). Some series use
+    only one (Hex Hall has P527 but no P179), so we accept BOTH; the ordinal (P1545) can qualify
+    either statement."""
     langs = f"{language},en" if language and language != "en" else "en"
     query = (
         "SELECT ?vol ?volLabel ?ord ?authorLabel WHERE {"
         f"  wd:{qid} wdt:P179? ?s ."                    # ?s = qid, or the series qid is part of
-        "  ?vol wdt:P179 ?s ."
+        "  { ?vol wdt:P179 ?s } UNION { ?s wdt:P527 ?vol }"  # volume→series OR series→volume
         f"  ?vol wdt:P31/wdt:P279* {_WRITTEN_WORK} ."   # books only — exclude films/games/…
         f"  {_author_filter(author)}"
         "  OPTIONAL { ?vol wdt:P50 ?author . }"
         "  OPTIONAL { ?vol p:P179 [ ps:P179 ?s ; pq:P1545 ?ord ] }"
+        "  OPTIONAL { ?s p:P527 [ ps:P527 ?vol ; pq:P1545 ?ord ] }"
         f'  SERVICE wikibase:label {{ bd:serviceParam wikibase:language "{langs}". }}'
         "} ORDER BY xsd:integer(?ord)"
     )
     resp = await client.get(_SPARQL, params={"query": query, "format": "json"})
     resp.raise_for_status()
-    out: list[tuple[int | None, str]] = []
-    seen: set[str] = set()
+    rows: list[tuple[int | None, str, bool]] = []  # (ordinal, label, is_omnibus)
+    omni_titles: set[str] = set()
     authors: list[str] = []
     for b in resp.json()["results"]["bindings"]:
         label = b.get("volLabel", {}).get("value", "").strip()
-        # Skip: no human label (Wikidata returns the Q-id), duplicates, and OMNIBUS editions
-        # (« Tome A / Tome B ») — combined volumes that would download as one confusing file
-        # (e.g. L'Assassin Royal); the individual volumes are listed separately anyway.
-        if (not label or (label.startswith("Q") and label[1:].isdigit())
-                or label.lower() in seen or " / " in label):
+        # Skip no-label rows (Wikidata returns the Q-id).
+        if not label or (label.startswith("Q") and label[1:].isdigit()):
             continue
-        seen.add(label.lower())
-        ordv = b.get("ord", {}).get("value", "")
-        out.append((int(ordv) if ordv.isdigit() else None, label))
         al = b.get("authorLabel", {}).get("value", "").strip()
         if al and not (al.startswith("Q") and al[1:].isdigit()):
             authors.append(al)
+        ordv = b.get("ord", {}).get("value", "")
+        ordn = int(ordv) if ordv.isdigit() else None
+        is_omni = " / " in label  # « Tome A / Tome B » combined edition
+        rows.append((ordn, label, is_omni))
+        if is_omni:
+            omni_titles.update(p.strip().lower() for p in label.split(" / "))
+
+    out: list[tuple[int | None, str]] = []
+    seen: set[str] = set()
+    if any(o for _, _, o in rows):
+        # OMNIBUS-described series: the row ordinals are often GROUP numbers (3 intégrales of 3
+        # books) that clash with a second, single-volume numbering on the standalone rows
+        # (Les Aventuriers de la Mer). Trusting them mislabels/duplicates. Instead, expand the
+        # omnibuses IN READING ORDER and renumber 1..N; a standalone row an omnibus already
+        # lists is redundant (the omnibus places it better). An omnibus is a source of TITLES
+        # to search individually — never downloaded as one file.
+        for _, label, is_omni in sorted(rows, key=lambda r: (r[0] is None, r[0] or 0)):
+            for part in ([p.strip() for p in label.split(" / ")] if is_omni else [label]):
+                key = part.lower()
+                if not part or key in seen or (not is_omni and key in omni_titles):
+                    continue
+                seen.add(key)
+                out.append((len(out) + 1, part))
+    else:
+        # Clean series: standalone rows with real per-volume ordinals — keep them (gaps and all).
+        for ordn, label, _ in rows:
+            if label.lower() in seen:
+                continue
+            seen.add(label.lower())
+            out.append((ordn, label))
     author_str = Counter(authors).most_common(1)[0][0] if authors else ""
     return out, author_str

@@ -35,3 +35,39 @@ def test_epub_source_offers_all_allowed_formats():
 
 def test_pdf_source_offers_only_pdf():
     assert _offerable("pdf", ["epub", "pdf", "mobi", "azw3"]) == ["pdf"]
+
+
+# --- volume sub-title recovery (label must follow the downloaded file) ------
+class _Cand:
+    def __init__(self, title):
+        self.title = title
+
+
+_KNOWN = ["Le Vaisseau magique", "L'Éveil des eaux dormantes", "Prisons d'eau et de bois",
+          "Les Marches du trône", "Le Seigneur des trois règnes"]
+
+
+def test_volume_title_relabels_from_file_and_snaps_to_wikidata_casing():
+    # Wikidata put « L'Éveil » at slot 5, but the file that IS tome 5 is « Prisons » — the
+    # label must follow the file, snapped to Wikidata's clean casing.
+    cand = _Cand("Les Aventuriers de la mer (Tome 5) - Prisons d'eau et de bois")
+    assert flow._volume_title(5, "L'Éveil des eaux dormantes", cand, "Les Aventuriers de la Mer", _KNOWN) \
+        == "Prisons d'eau et de bois"
+
+
+def test_volume_title_keeps_wikidata_when_file_agrees_or_number_differs():
+    agree = _Cand("Les Aventuriers de la mer (Tome 1) - Le vaisseau magique")
+    assert flow._volume_title(1, "Le Vaisseau magique", agree, "Les Aventuriers de la Mer", _KNOWN) \
+        == "Le Vaisseau magique"  # same volume → keep Wikidata spelling
+    # A file whose tome number can't be read (or ≠ num) must never override the label.
+    murky = _Cand("L'assassin royal [002] – L'assassin du roi")
+    assert flow._volume_title(2, "L'Assassin du roi", murky, "L'Assassin Royal", ["L'Assassin du roi"]) \
+        == "L'Assassin du roi"
+
+
+def test_clean_subtitle_strips_series_tome_and_edition_cruft():
+    S = "Les Aventuriers de la Mer"
+    assert flow._clean_subtitle("Ombres et flammes (Les Aventuriers de la mer, 8) (French Edition)", S) \
+        == "Ombres et flammes"
+    assert flow._clean_subtitle("Brumes et tempêtes (Les Aventuriers de la mer (4)) (French Edition)", S) \
+        == "Brumes et tempêtes"

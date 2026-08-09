@@ -13,6 +13,7 @@ import os
 import re
 import tempfile
 import time
+import unicodedata
 import zipfile
 from collections import Counter
 
@@ -387,6 +388,44 @@ def _vol_label(num: int | None, title: str) -> str:
     return f"Tome {num} — {title}"[:100] if num is not None else title[:100]
 
 
+def _clean_subtitle(cand_title: str, series_name: str) -> str:
+    """Extract a volume's own sub-title from a catalogue title, stripping the series name,
+    the tome marker, and edition cruft. « Les Aventuriers de la mer (Tome 5) - Prisons d'eau
+    et de bois » → « Prisons d'eau et de bois »; « Ombres et flammes (…, 8) (French Edition) »
+    → « Ombres et flammes »."""
+    t = re.sub(re.escape(series_name), " ", cand_title, flags=re.I)
+    t = re.sub(r"\(?\s*tomes?\s*\d+\s*\)?", " ", t, flags=re.I)   # (Tome 5), tome 5
+    t = re.sub(r"\bT\.?\s*\d+\b", " ", t, flags=re.I)             # T.2, T02
+    t = re.sub(r"[\[(]\s*\d+\s*[\])]", " ", t)                    # (4), [002]
+    t = re.sub(r",\s*\d+\b", " ", t)                             # , 8
+    t = re.sub(r"\((?:french edition|science[- ]?fiction|fantasy|roman)\)", " ", t, flags=re.I)
+    t = re.sub(r"[()\[\]{}·–—:_/]", " ", t)                      # leftover separators/brackets
+    t = re.sub(r"\s+", " ", t).strip(" .-")
+    return t[:1].upper() + t[1:] if t else ""
+
+
+def _norm_title(s: str) -> str:
+    """Accent- and case-insensitive key for matching two spellings of the same title."""
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def _volume_title(num: int | None, wiki_title: str, cand, series_name: str, known: list[str]) -> str:
+    """The sub-title to LABEL a downloaded tome with. Normally Wikidata's title, but when the
+    chosen file confidently IS tome ``num`` and names a DIFFERENT volume (Wikidata's title-order
+    can disagree with an edition's numbering — L'Éveil/Prisons), trust the file: label follows
+    content, not the catalogue's numbering guess. Snap back to the cleanly-cased Wikidata title
+    when the file's sub-title is just another volume of the same series."""
+    if num is None or _detect_tome(cand.title) != num:
+        return wiki_title
+    sub = _clean_subtitle(cand.title, series_name)
+    if len(sub) < 3 or sub.lower() == wiki_title.lower():
+        return wiki_title
+    canon = {_norm_title(k): k for k in known}
+    return canon.get(_norm_title(sub), sub)  # prefer Wikidata's spelling if it's a known volume
+
+
 async def _run_batch(ctx: ClientContext, plan) -> None:
     """Identify the series (Wikidata → canonical ordered volumes), find each volume's file
     in the catalogue (in the requested language), and let the user multi-select the tomes.
@@ -396,6 +435,12 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
     entries = await _series_entries(ctx, plan, vols) if vols else []
 
     if entries:  # clean, ordered "Tome N — title" → several candidate editions
+        # Make each tome's LABEL follow the file that will actually be delivered — BEFORE the
+        # card. Wikidata's title-order can disagree with the edition's numbering (Aventuriers
+        # T5/T6, T7/T9); the « tome N » match pulls the real tome N into slot N, so the label
+        # (and thus the order the user SEES) must come from that file, not the catalogue guess.
+        known_titles = [t for _, t, _ in entries]
+        entries = [(n, _volume_title(n, t, cands[0], plan.query, known_titles), cands) for n, t, cands in entries]
         choices = [
             Choice(_vol_label(n, t), str(i), description=_meta_line(cands[0]))
             for i, (n, t, cands) in enumerate(entries)

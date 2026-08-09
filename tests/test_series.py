@@ -60,18 +60,21 @@ def test_missing_ordinal_is_none(monkeypatch):
     assert asyncio.run(series.volumes("x")) == [(None, "A"), (None, "B"), (None, "C")]
 
 
-def test_resolve_drops_omnibus_and_returns_author(monkeypatch):
+def test_resolve_recovers_missing_volume_from_omnibus(monkeypatch):
+    # « L'Assassin du roi » (real T2) exists on Wikidata ONLY inside the omnibus; it must be
+    # recovered (at the omnibus ordinal), while « La Nef du crépuscule » — which has its own
+    # standalone row — must NOT be duplicated out of the omnibus.
     api = {"search": [{"id": "Q1"}]}
     sparql = {"results": {"bindings": [
         {"volLabel": {"value": "L'Apprenti assassin"}, "ord": {"value": "1"}, "authorLabel": {"value": "Robin Hobb"}},
-        {"volLabel": {"value": "L'Assassin du roi / La Nef du crépuscule"}, "ord": {"value": "2"},  # omnibus → dropped
+        {"volLabel": {"value": "L'Assassin du roi / La Nef du crépuscule"}, "ord": {"value": "2"},  # omnibus
          "authorLabel": {"value": "Robin Hobb"}},
         {"volLabel": {"value": "La Nef du crépuscule"}, "ord": {"value": "3"}, "authorLabel": {"value": "Robin Hobb"}},
     ]}}
     _install(monkeypatch, api, sparql)
     author, vols = asyncio.run(series.resolve("L'Assassin Royal"))
     assert author == "Robin Hobb"
-    assert vols == [(1, "L'Apprenti assassin"), (3, "La Nef du crépuscule")]  # « A / B » omnibus removed
+    assert vols == [(1, "L'Apprenti assassin"), (2, "L'Assassin du roi"), (3, "La Nef du crépuscule")]
 
 
 def test_author_filter_requires_every_name_word():
@@ -114,6 +117,9 @@ def test_query_restricts_volumes_to_written_works(monkeypatch):
     asyncio.run(series.volumes("Hunger Games"))
     members_q = next(q for q in queries if "?vol wdt:P179" in q)  # the volume-listing query
     assert "wdt:P31/wdt:P279*" in members_q and "Q7725634" in members_q
+    # Series are linked to volumes in EITHER direction: P179 (volume→series) or P527
+    # (series→volume, e.g. Hex Hall). The query must accept both.
+    assert "?s wdt:P527 ?vol" in members_q and "UNION" in members_q
 
 
 def test_skips_unlabelled_qid_and_dupes(monkeypatch):

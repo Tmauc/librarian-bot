@@ -270,9 +270,22 @@ class AnnaArchiveSource(Source):
     ) -> str:
         md5 = result.ref.get("md5", "")
         ext = _sanitize_ext(result.ext)
+        # Anna's own endpoints are uniformly gated: fast_download needs a paid membership
+        # (302 → /fast_download_not_member) and slow_download sits behind a DDoS-Guard JS
+        # challenge (403) we can't solve. Once the FIRST of either type fails that way, every
+        # other partner-index behaves identically — so bail on the whole type instead of
+        # grinding through dozens of dead links (was ~2.5 min/book).
+        membership_dead = slow_dead = False
+        dead_hosts: set[str] = set()  # a mirror host that already failed won't recover mid-run
         async with self._client(90) as client:
             links = await self._get_download_links(client, md5)
             for url in links:
+                low = url.lower()
+                is_fast = "/fast_download/" in low
+                is_slow = "/slow_download/" in low
+                host = urlparse(low).netloc
+                if (is_fast and membership_dead) or (is_slow and slow_dead) or host in dead_hosts:
+                    continue
                 try:
                     if ".onion" in url or not self._is_trusted_url(url):
                         continue
@@ -280,6 +293,11 @@ class AnnaArchiveSource(Source):
                     async with client.stream("GET", url) as resp:
                         if resp.status_code != 200:
                             logger.warning(f"URL {_redact_url(url)} returned {resp.status_code}")
+                            if is_slow and resp.status_code in (403, 429, 503) and not slow_dead:
+                                slow_dead = True
+                                logger.info("Anna slow_download gated (DDoS-Guard/rate) → skipping the rest")
+                            elif not (is_fast or is_slow) and resp.status_code >= 500:
+                                dead_hosts.add(host)  # flaky external mirror; don't retry same host
                             continue
                         ctype = resp.headers.get("content-type", "").split(";")[0].strip()
                         if "text/html" in ctype:
@@ -297,6 +315,11 @@ class AnnaArchiveSource(Source):
                             logger.info(f"Downloaded from {_redact_url(url)}")
                             return path
                 except Exception as e:
+                    if is_fast and "not_member" in str(e) and not membership_dead:
+                        membership_dead = True
+                        logger.info("No Anna membership → skipping the rest of the fast_download links")
+                    elif not (is_fast or is_slow) and isinstance(e, httpx.TransportError):
+                        dead_hosts.add(host)  # unreachable/timed-out mirror; don't retry same host
                     logger.warning(f"URL {_redact_url(url)} failed: {e}")
         raise RuntimeError(f"All mirrors failed for md5={md5}")
 
@@ -308,22 +331,39 @@ class AnnaArchiveSource(Source):
             resp = await client.get(page_url)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
-            links: list[str] = []
+            mirrors: list[str] = []
+            own: list[str] = []  # Anna's own fast/slow_download endpoints
             seen: set[str] = set()
             for a in soup.select("a[href]"):
                 href = (a.get("href") or "").strip()
                 if not href or href.startswith(("#", "javascript:")):
                     continue
                 full = href if href.startswith("http") else urljoin(f"{self.base_url}/", href)
-                if full in seen or not _is_safe_url(full) or not _is_download_link(full, md5, base_host):
+                if not _is_safe_url(full) or not _is_download_link(full, md5, base_host):
                     continue
-                seen.add(full)
-                links.append(full)
-            # Good external mirrors first, Anna's membership-gated endpoints last.
-            links.sort(key=_link_rank)
-            if slow not in seen:  # always keep the last-resort slow_download
-                links.append(slow)
-            logger.info(f"Found {len(links)} download links for md5={md5}")
+                low = full.lower()
+                is_own = "/fast_download/" in low or "/slow_download/" in low
+                # Anna decorates each endpoint with tracking-only query variants
+                # (?viewer=1, ?no_redirect=1, ?short=1) that all behave identically —
+                # collapse them so we don't try the same dead endpoint 4×.
+                key = full.split("?", 1)[0] if is_own else full
+                if key in seen:
+                    continue
+                seen.add(key)
+                (own if is_own else mirrors).append(key if is_own else full)
+            # Good external mirrors first, Anna's membership-gated endpoints last. All
+            # partner-indices are gated the same way, so keep only a couple of each as a
+            # last resort (the download loop short-circuits once it sees the gate).
+            mirrors.sort(key=_link_rank)
+            fast = [u for u in own if "/fast_download/" in u.lower()][:2]
+            slows = [u for u in own if "/slow_download/" in u.lower()][:2]
+            if slow.split("?", 1)[0] not in {u.split("?", 1)[0] for u in slows}:
+                slows.append(slow)  # always keep the last-resort slow_download
+            links = mirrors + fast + slows
+            logger.info(
+                f"Found {len(links)} download links for md5={md5} "
+                f"({len(mirrors)} mirror, {len(fast) + len(slows)} anna-own)"
+            )
             return links
         except Exception as e:
             logger.warning(f"Could not scrape book page for md5={md5}: {e}")
