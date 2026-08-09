@@ -1,20 +1,40 @@
+# Déploiement du bot. Par défaut : image construite localement + configuration lue dans .env.
+#
+#   docker compose up -d --build
+#
+# ── Planner LLM (Ollama) ──────────────────────────────────────────────────────
+# Si Ollama tourne sur l'HÔTE (hors Docker), mets dans .env :
+#   LLM_BASE_URL=http://host.docker.internal:11434
+# (le service `bot` résout `host.docker.internal` vers l'hôte, cf. extra_hosts.)
+#
+# ── Uploads Telegram > 50 Mo (optionnel) ──────────────────────────────────────
+# Un serveur Bot API local autorise jusqu'à ~2 Go. Active-le avec le profil dédié :
+#   docker compose --profile telegram-local up -d --build
+# et renseigne dans .env : LOCAL_API_ID / LOCAL_API_HASH +
+#   LOCAL_API_SERVER=http://telegram-bot-api:8081
+#
+# ── Torrents (Prowlarr, optionnel) ────────────────────────────────────────────
+# Ajoute le montage du dossier de téléchargement via un docker-compose.override.yml :
+#   services: { bot: { volumes: [ "${BOOKS_DOWNLOAD_PATH}:${BOOKS_DOWNLOAD_PATH}:ro" ] } }
+
 services:
   bot:
-    image: ghcr.io/owner/librarian-bot:latest
+    build: .
+    image: librarian-bot:local
     restart: unless-stopped
     env_file: .env
     environment:
       - USER_PREFS_FILE=data/user_prefs.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - ${BOOKS_DOWNLOAD_PATH}:${BOOKS_DOWNLOAD_PATH}:ro
       - ./data:/app/data
     networks:
       - internal
-    depends_on:
-      - telegram-bot-api
 
   telegram-bot-api:
     image: ghcr.io/tdlib/telegram-bot-api:latest
+    profiles: ["telegram-local"]
     restart: unless-stopped
     ports:
       - "8081:8081"
