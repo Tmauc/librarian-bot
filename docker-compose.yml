@@ -27,6 +27,13 @@ services:
       - USER_PREFS_FILE=data/user_prefs.json
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # DNS publics par défaut : de nombreux résolveurs de box/FAI "sinkholent" les domaines
+    # de téléchargement (libgen.*) vers 127.0.0.1 — le garde SSRF les rejette alors et TOUS
+    # les téléchargements échouent. Voir README → Troubleshooting. Retire ce bloc si ton
+    # réseau ne filtre pas et que tu préfères ton résolveur local.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     volumes:
       - ./data:/app/data
     networks:

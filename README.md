@@ -286,12 +286,28 @@ Use `/settings` at any time to update your preferences (format, email, Kindle ad
 
 ## Troubleshooting
 
-- **"All download sources unavailable"** — your ISP's DNS may be blocking download servers (Libgen, etc.). Switch to a public DNS such as Cloudflare (`1.1.1.1`) or Google (`8.8.8.8`). When running in Docker, you can set this in `docker-compose.yml`:
-  ```yaml
-  services:
-    bot:
-      dns:
-        - 1.1.1.1
-        - 8.8.8.8
+- **All downloads fail / "All mirrors failed" (DNS sinkhole).** The most common self-hosting
+  trap. Symptom in the logs: every book cycles through `fast_download` (302 → `not_member`),
+  `slow_download` (403), and other mirrors, then `All mirrors failed for md5=…` — and you never
+  see a `libgen.li/file.php` attempt.
+
+  **Why:** many ISP/router DNS resolvers (and Pi-hole/AdGuard blocklists) *sinkhole* piracy
+  domains — `libgen.li`, `libgen.is`, `libgen.gs` resolve to `127.0.0.1` / `::1` instead of their
+  real IP. The bot's SSRF guard then correctly refuses them (loopback = internal), so it never
+  tries the one mirror that actually works and falls back to Anna's membership/DDoS-Guard-gated
+  endpoints, which all fail.
+
+  **Diagnose** (compare a sinkholed resolver vs a public one):
+  ```bash
+  getent hosts libgen.li            # 127.0.0.1  → sinkholed
+  nslookup libgen.li 1.1.1.1        # 179.43.167.164 → the real IP
   ```
-  For French users, a step-by-step guide is available in [LISEZMOI.md](./LISEZMOI.md).
+
+  **Fix:** use a public resolver. The provided `docker-compose.yml` already sets
+  `dns: [1.1.1.1, 8.8.8.8]` on the `bot` service, so a Docker deploy is immune out of the box.
+  If you run without that block (bare Python, or you removed it), point the host — or just the
+  Docker daemon (`/etc/docker/daemon.json` → `{"dns":["1.1.1.1","8.8.8.8"]}`, then restart Docker)
+  — at Cloudflare/Google DNS. French users: step-by-step guide in [LISEZMOI.md](./LISEZMOI.md).
+
+  This is **not** "the mirrors keep changing": the bot re-scrapes Anna's md5 page for current
+  mirrors on every download — it only needs `libgen.li` to be resolvable.
