@@ -65,6 +65,22 @@ def test_volume_title_keeps_wikidata_when_file_agrees_or_number_differs():
         == "L'Assassin du roi"
 
 
+# --- batch sub-status line (live feedback under the current tome) -----------
+def test_status_line_surfaces_download_percent():
+    # the percent lives on the 2nd line of the progress message — it must be surfaced
+    assert flow._status_line("⬇️ « Titre »\n▓▓░░░ 45%  (1.2 / 2.6 MB)") == "⬇️ téléchargement 45%"
+
+
+def test_status_line_takes_first_line_and_strips_spinner_dots():
+    assert flow._status_line("⏳ Recherche du fichier ...") == "⏳ Recherche du fichier"
+    assert flow._status_line("🔄 Essai du résultat suivant : « X »…").startswith("🔄 Essai")
+
+
+def test_status_line_ignores_non_string():
+    assert flow._status_line(None) == ""
+    assert flow._status_line(object()) == ""
+
+
 def test_clean_subtitle_strips_series_tome_and_edition_cruft():
     S = "Les Aventuriers de la Mer"
     assert flow._clean_subtitle("Ombres et flammes (Les Aventuriers de la mer, 8) (French Edition)", S) \

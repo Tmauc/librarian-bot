@@ -87,22 +87,26 @@ def _cancel_btn() -> list[Choice]:
 
 
 class _QuietContext:
-    """A ctx proxy used during batch delivery: silences per-book chatter (``say`` /
-    ``update_status``, including a destination's own status messages) while forwarding
-    everything else — uploads, identity, limits, the session. This lets the batch loop
-    own ONE consolidated live message instead of dozens of interleaved ones."""
+    """A ctx proxy used during batch delivery: per-book chatter (``say`` / ``update_status``,
+    including a destination's own status messages) is NOT sent as its own message. Instead each
+    update is forwarded to ``on_status`` so the batch loop can surface it as a live sub-line under
+    the current tome — one consolidated message that still shows what's happening. Everything else
+    — uploads, identity, limits, the session — passes through untouched."""
 
-    def __init__(self, ctx: ClientContext):
+    def __init__(self, ctx: ClientContext, on_status=None):
         self._ctx = ctx
+        self._on_status = on_status
 
     def __getattr__(self, name):  # forward uploads, user_key, data, max_file_size, session…
         return getattr(self._ctx, name)
 
     async def say(self, content) -> None:
-        pass
+        if self._on_status:
+            await self._on_status(content)
 
     async def update_status(self, content, choices=None) -> None:
-        pass
+        if self._on_status:
+            await self._on_status(content)
 
 
 # ===========================================================================
@@ -433,6 +437,10 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
     Falls back to raw catalogue results if the series is unknown to Wikidata."""
     await ctx.say(f"🔎 Identification de « {plan.query} »…")
     wiki_author, vols = await series.resolve(plan.query, plan.language or "fr", plan.author)
+    if vols:
+        await ctx.update_status(
+            f"📚 {len(vols)} tome(s) identifié(s) — recherche des fichiers dans le catalogue…", _cancel_btn()
+        )
     entries = await _series_entries(ctx, plan, vols) if vols else []
 
     if entries:  # clean, ordered "Tome N — title" → several candidate editions
@@ -497,30 +505,64 @@ async def _run_batch_downloads(ctx: ClientContext, series_name: str, chosen, des
     candidate editions so a dead mirror falls back instead of failing the tome."""
     total = len(chosen)
     log: list[tuple[bool, str]] = []  # (delivered?, label) in order
-    quiet = _QuietContext(ctx)
+    state = {"label": None, "sub": "", "last": ""}  # current tome + its live sub-status line
+
+    async def _refresh() -> None:
+        await ctx.update_status(
+            _batch_card(series_name, log, current=state["label"], total=total, sub=state["sub"]),
+            _cancel_btn(),
+        )
+
+    async def _on_status(content) -> None:
+        s = _status_line(content)
+        if not s or s == state["last"]:  # dedup (also collapses animated "…" spinners)
+            return
+        state["last"] = state["sub"] = s
+        await _refresh()
+
+    quiet = _QuietContext(ctx, _on_status)
     for label, candidates, hint in chosen:
-        await ctx.update_status(_batch_card(series_name, log, current=label, total=total), _cancel_btn())
+        state["label"], state["sub"], state["last"] = label, "", ""
+        await _refresh()
         ok = await _deliver(quiet, candidates, 0, desired_fmt, destination, meta_hint=hint)
         log.append((ok, label))
     # Final frame of the live message (no "in progress" line, no cancel button)…
+    state["label"] = state["sub"] = None
     await ctx.update_status(_batch_card(series_name, log, current=None, total=total))
     delivered = sum(1 for ok, _ in log if ok)
     tail = "" if delivered == total else "\nRéessaie les tomes ❌ dans quelques minutes — mirrors momentanément indispo."
     await ctx.say(f"✅ Terminé — {delivered}/{total} tome(s) livré(s).{tail}")
 
 
-def _batch_card(series_name: str, log: list[tuple[bool, str]], current: str | None, total: int) -> Card:
-    """The single evolving batch message: global bar + ✅/❌ checklist + current tome."""
+def _batch_card(series_name: str, log: list[tuple[bool, str]], current: str | None, total: int,
+                sub: str = "") -> Card:
+    """The single evolving batch message: global bar + ✅/❌ checklist + current tome, with a
+    live sub-status line under the current tome (what it's doing right now)."""
     done = len(log)
     pct = int(done / total * 100) if total else 0
     lines = [f"{'✅' if ok else '❌'} {label[:70]}" for ok, label in log]
     if current is not None:
         lines.append(f"⏳ {current[:70]}…")
+        if sub:
+            lines.append(f"     ↳ {sub}")
     return Card(
         title=f"🧠 {series_name}",
         description=f"{_progress_bar(pct)}  {done}/{total} tome(s)\n\n" + "\n".join(lines),
         footer="Téléchargement de la série…" if current is not None else "Série téléchargée",
     )
+
+
+def _status_line(content) -> str:
+    """Compress a per-book status message into a short sub-line for the batch card. Surfaces the
+    download percentage (which lives on the 2nd line of the progress message), and strips trailing
+    dots/ellipses so an animated spinner dedups to a single refresh instead of flickering."""
+    if not isinstance(content, str):
+        return ""
+    m = re.search(r"(\d{1,3})\s*%", content)
+    if "⬇️" in content and m:
+        return f"⬇️ téléchargement {m.group(1)}%"
+    line = content.strip().split("\n", 1)[0].strip()
+    return line.rstrip(" .…")[:64]
 
 
 async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
