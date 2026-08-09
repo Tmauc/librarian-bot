@@ -18,6 +18,16 @@ VALID_CONTENT_TYPES = {
     "application/octet-stream",
 }
 
+# Leading magic bytes per extension, for rejecting a mismatched file AS IT STREAMS instead
+# of downloading the whole thing first. An EPUB (OCF zip) starts with the local-file-header
+# ``PK\x03\x04``; a PDF with ``%PDF``. Some Anna mirrors serve a corrupt Office document
+# (``\xd0\xcf\x11\xe0``) under an .epub name — this catches it after 4 bytes. MOBI/AZW3 carry
+# their signature at offset 60, not the start, so we don't early-check them (flow still validates).
+_HEAD_MAGIC: dict[str, tuple[bytes, ...]] = {
+    "epub": (b"PK\x03\x04",),
+    "pdf": (b"%PDF",),
+}
+
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
@@ -42,6 +52,8 @@ async def stream_to_tempfile(
     last_report = 0.0
     last_pct = -1
     suffix = f".{ext}" if ext else ".epub"
+    expected_magic = _HEAD_MAGIC.get((ext or "").lower())
+    head = b""
     path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix="librarian_") as f:
@@ -49,6 +61,13 @@ async def stream_to_tempfile(
             async for chunk in resp.aiter_bytes(65536):
                 f.write(chunk)
                 downloaded += len(chunk)
+                # Fail fast on a wrong file type: check the leading bytes as soon as we have
+                # them, so a corrupt/mislabelled mirror (e.g. an Office doc served as .epub)
+                # is dropped after 4 bytes instead of a full multi-MB download.
+                if expected_magic is not None and len(head) < 4:
+                    head += chunk[: 4 - len(head)]
+                    if len(head) >= 4 and not any(head.startswith(m) for m in expected_magic):
+                        raise RuntimeError(f"Not a real .{ext} (header {head!r})")
                 if max_bytes and downloaded > max_bytes:
                     raise RuntimeError(f"File too large (>{max_bytes // 1024 // 1024} MB)")
                 if on_progress:
