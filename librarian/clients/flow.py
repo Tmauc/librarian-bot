@@ -431,6 +431,19 @@ def _volume_title(num: int | None, wiki_title: str, cand, series_name: str, know
     return canon.get(_norm_title(sub), sub)  # prefer Wikidata's spelling if it's a known volume
 
 
+def _missing_note(missing: list[tuple]) -> str:
+    """A short 'unavailable' section for volumes Wikidata knows but the catalogue has no file for,
+    so a gap in the tome list is explicit (« Tome 6 — L'Homme noir (indisponible) ») instead of a
+    silently missing number."""
+    if not missing:
+        return ""
+    lines = "\n".join(
+        f"⚪ Tome {n} — {t} (indisponible)" if n is not None else f"⚪ {t} (indisponible)"
+        for n, t in missing
+    )
+    return f"\n\n⚠️ Introuvable(s) dans le catalogue :\n{lines}"
+
+
 async def _run_batch(ctx: ClientContext, plan) -> None:
     """Identify the series (Wikidata → canonical ordered volumes), find each volume's file
     in the catalogue (in the requested language), and let the user multi-select the tomes.
@@ -441,7 +454,7 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
         await ctx.update_status(
             f"📚 {len(vols)} tome(s) identifié(s) — recherche des fichiers dans le catalogue…", _cancel_btn()
         )
-    entries = await _series_entries(ctx, plan, vols) if vols else []
+    entries, missing = await _series_entries(ctx, plan, vols, wiki_author) if vols else ([], [])
 
     if entries:  # clean, ordered "Tome N — title" → several candidate editions
         # Make each tome's LABEL follow the file that will actually be delivered — BEFORE the
@@ -456,7 +469,7 @@ async def _run_batch(ctx: ClientContext, plan) -> None:
         ]
         card = Card(
             title=f"🧠 {plan.query}",
-            description=f"{len(entries)} tome(s) trouvé(s) — coche ceux à télécharger :",
+            description=f"{len(entries)} tome(s) trouvé(s) — coche ceux à télécharger :" + _missing_note(missing),
             footer="Série identifiée via Wikidata + catalogue",
         )
         picked = await ctx.ask_multi_choice(card, choices)
@@ -565,16 +578,19 @@ def _status_line(content) -> str:
     return line.rstrip(" .…")[:64]
 
 
-async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
-    """Map each canonical volume to its best catalogue candidates (several editions,
-    preferring the requested language), then backfill any numbered tome the catalogue
-    has but Wikidata missed. Returns ordered ``(number, title, [results])`` tuples."""
+async def _series_entries(ctx: ClientContext, plan, vols: list[tuple], resolved_author: str = ""):
+    """Map each canonical volume to its best catalogue candidates (several editions, preferring
+    the requested language), then backfill any numbered tome the catalogue has but Wikidata missed.
+    Returns ``(entries, missing)``: entries = ordered ``(number, title, [results])`` tuples for the
+    volumes found, missing = ``(number, title)`` for volumes with NO candidate (shown as unavailable
+    instead of silently dropped)."""
     lang = plan.language
     fmt = plan.desired_format if plan.desired_format in config.ALLOWED_FORMATS else config.ALLOWED_FORMATS[0]
-    author = plan.author
+    author = plan.author or resolved_author  # Wikidata P50 backfills the LLM's often-empty author
     edition = (await prefs.get(ctx.user_key)).get("edition_pref", DEFAULT_EDITION)
-    searches = await asyncio.gather(*[_search_volume(ctx, plan.query, num, title) for num, title in vols])
+    searches = await asyncio.gather(*[_search_volume(ctx, plan.query, num, title, author) for num, title in vols])
     entries: list[tuple] = []
+    missing: list[tuple] = []
     covered: set[int] = set()
     for (num, title), results in zip(vols, searches, strict=True):
         cands = _best_matches(title, num, results, lang, fmt, author, edition)
@@ -582,6 +598,8 @@ async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
             entries.append((num, title, cands))
             if num is not None:
                 covered.add(num)
+        else:
+            missing.append((num, title))
 
     # Backfill numbered tomes the catalogue has but Wikidata missed — but ONLY within the
     # series' own range (≤ the highest known tome), matching language + format + author, so
@@ -601,7 +619,10 @@ async def _series_entries(ctx: ClientContext, plan, vols: list[tuple]):
 
     entries = _dedupe_entries(entries)
     entries.sort(key=lambda e: (e[0] is None, e[0] if e[0] is not None else 0))
-    return entries
+    # A backfilled tome number is no longer "missing"; keep the rest, in tome order.
+    missing = [(n, t) for n, t in missing if n is None or n not in covered]
+    missing.sort(key=lambda m: (m[0] is None, m[0] if m[0] is not None else 0))
+    return entries, missing
 
 
 def _author_match(result_author: str, author: str) -> bool:
@@ -636,12 +657,17 @@ def _dedupe_entries(entries: list[tuple]) -> list[tuple]:
     return out
 
 
-async def _search_volume(ctx: ClientContext, series_name: str, num: int | None, title: str):
+async def _search_volume(ctx: ClientContext, series_name: str, num: int | None, title: str, author: str = ""):
     """Find a volume's editions in the catalogue. We search BOTH by sub-title and by
     « série tome N », because French editions are often titled « Série, tome N » rather
     than by the sub-title (the sub-title query alone returned English for e.g. Hunger
     Games tome 1). Results are merged and de-duplicated by file."""
     queries = [f"{series_name} {title}"]
+    if author:
+        # The series name may be the ENGLISH one (« The Tawny Man Trilogy ») while the volume is
+        # a French edition — « L'Homme noir Robin Hobb » finds it where « Tawny Man Trilogy L'Homme
+        # noir » only returns English omnibuses. Sub-title + author is the reliable French query.
+        queries.append(f"{title} {author}")
     if num is not None:
         queries.append(f"{series_name} tome {num}")
     lists = await asyncio.gather(*[search_service.search(q, ctx.max_file_size) for q in queries])

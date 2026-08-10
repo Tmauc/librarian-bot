@@ -65,6 +65,18 @@ def test_volume_title_keeps_wikidata_when_file_agrees_or_number_differs():
         == "L'Assassin du roi"
 
 
+# --- missing-volume note (unavailable tomes shown, not silently dropped) ----
+def test_missing_note_lists_unavailable_volumes():
+    assert flow._missing_note([]) == ""
+    note = flow._missing_note([(6, "L'Homme noir"), (9, "Les Marches")])
+    assert "Tome 6 — L'Homme noir (indisponible)" in note
+    assert "Tome 9 — Les Marches (indisponible)" in note
+
+
+def test_missing_note_handles_unnumbered_volume():
+    assert flow._missing_note([(None, "Wool")]) == "\n\n⚠️ Introuvable(s) dans le catalogue :\n⚪ Wool (indisponible)"
+
+
 # --- batch sub-status line (live feedback under the current tome) -----------
 def test_status_line_surfaces_download_percent():
     # the percent lives on the 2nd line of the progress message — it must be surfaced
