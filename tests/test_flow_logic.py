@@ -100,6 +100,12 @@ def test_series_decision_noop_for_single_series():
     assert flow._series_decision("dune", [("Q1", "Dune", 6)]) == (None, None)
 
 
+def test_series_decision_ignores_language_and_intent_noise():
+    # « en vf » / « intégrale » must not force the menu when the query names one series
+    mode, hit = flow._series_decision("l'intégrale des aventuriers de la mer en vf", _HOBB_SERIES)
+    assert mode == "pick" and hit[1] == "Les Aventuriers de la mer"
+
+
 # --- missing-volume note (unavailable tomes shown, not silently dropped) ----
 def test_missing_note_lists_unavailable_volumes():
     assert flow._missing_note([]) == ""

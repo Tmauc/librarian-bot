@@ -447,6 +447,8 @@ def _missing_note(missing: list[tuple]) -> str:
 _SERIES_STOPWORDS = {
     "le", "la", "les", "l", "de", "du", "des", "d", "un", "une", "et", "the", "of", "a",
     "cycle", "cycles", "saga", "serie", "series", "integrale", "tome", "tomes", "coffret", "trilogie",
+    # intent / language / format noise that must not force the disambiguation menu
+    "en", "vf", "vo", "va", "vostfr", "fr", "francais", "anglais", "complete", "collection", "pack",
 }
 
 
@@ -508,6 +510,11 @@ async def _run_batch(ctx: ClientContext, plan, raw_query: str = "") -> None:
     await ctx.say(f"🔎 Identification de « {plan.query} »…")
     wiki_author, vols = await series.resolve(plan.query, plan.language or "fr", plan.author)
     author = plan.author or wiki_author
+    if not author:
+        # Wikidata missed the series (a French title without its exact article — « Assassin Royal »
+        # resolves to nothing). Identify the author from the CATALOGUE instead (Anna covers French
+        # titles far better) so the cycle menu can still fire: « Assassin Royal » → Robin Hobb.
+        author = _dominant_result_author(await search_service.search(plan.query, ctx.max_file_size))
     if author:  # let the user pick the right cycle when a saga is ambiguous (see _disambiguate_series)
         vols, plan.query = await _disambiguate_series(
             ctx, raw_query or plan.query, author, plan.language, vols, plan.query
@@ -1001,6 +1008,14 @@ def _dominant_author(entries: list[tuple]) -> str:
     """One author for the whole series: the most common cleaned author across the matched
     editions (they disagree — translators, « Nom Prénom » vs « Prénom Nom »)."""
     names = [metadata.clean_author(cands[0].author) for _, _, cands in entries if cands and cands[0].author]
+    names = [n for n in names if n]
+    return Counter(names).most_common(1)[0][0] if names else ""
+
+
+def _dominant_result_author(results) -> str:
+    """Most common cleaned author across raw catalogue results — used to identify a series' author
+    when Wikidata can't resolve the (French) title (« Assassin Royal » → « Robin Hobb »)."""
+    names = [metadata.clean_author(r.author) for r in results if r.author]
     names = [n for n in names if n]
     return Counter(names).most_common(1)[0][0] if names else ""
 
