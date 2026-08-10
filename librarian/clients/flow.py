@@ -531,24 +531,26 @@ async def _run_batch(ctx: ClientContext, plan, raw_query: str = "") -> None:
     """Identify the series (Wikidata → canonical ordered volumes), find each volume's file
     in the catalogue (in the requested language), and let the user multi-select the tomes.
     Falls back to raw catalogue results if the series is unknown to Wikidata."""
-    await ctx.say(f"🔎 Identification de « {plan.query} »…")
-    wiki_author, vols = await series.resolve(plan.query, plan.language or "fr", plan.author)
-    author = plan.author or wiki_author
-    if not author:
-        # Wikidata missed the series (a French title without its exact article — « Assassin Royal »
-        # resolves to nothing). Identify the author from the CATALOGUE instead (Anna covers French
-        # titles far better) so the cycle menu can still fire: « Assassin Royal » → Robin Hobb. If
-        # several authors are plausible, ask which one.
-        author = await _pick_author(ctx, plan.query, await search_service.search(plan.query, ctx.max_file_size))
-    if author:  # let the user pick the right cycle when a saga is ambiguous (see _disambiguate_series)
-        vols, plan.query = await _disambiguate_series(
-            ctx, raw_query or plan.query, author, plan.language, vols, plan.query
-        )
+    # Identify the AUTHOR from the catalogue using the USER'S OWN words (raw query, batch-keyword
+    # stripped) — robust to an LLM that mis-titled the query: « assassin royal … » finds Robin Hobb
+    # even when the model hallucinated « Assassin's Creed II ». The LLM is now only trusted to say
+    # « this is a series », not to name it. Then offer that author's series/cycles (menu if ambiguous).
+    raw = _clean_series_query(raw_query or plan.query) or plan.query
+    await ctx.say(f"🔎 Identification de « {raw} »…")
+    author = plan.author or await _pick_author(ctx, raw, await search_service.search(raw, ctx.max_file_size))
+    vols: list = []
+    if author:
+        vols, plan.query = await _disambiguate_series(ctx, raw_query or plan.query, author, plan.language, [], plan.query)
+    if not vols:
+        # Fallback: Wikidata title resolution (author unknown to the catalogue, or with no catalogued
+        # series) — preserves the old path for series a plain title lookup already handles.
+        wiki_author, vols = await series.resolve(plan.query, plan.language or "fr", plan.author)
+        author = author or plan.author or wiki_author
     if vols:
         await ctx.update_status(
             f"📚 {len(vols)} tome(s) identifié(s) — recherche des fichiers dans le catalogue…", _cancel_btn()
         )
-    entries, missing = await _series_entries(ctx, plan, vols, wiki_author) if vols else ([], [])
+    entries, missing = await _series_entries(ctx, plan, vols, author) if vols else ([], [])
 
     if entries:  # clean, ordered "Tome N — title" → several candidate editions
         # Make each tome's LABEL follow the file that will actually be delivered — BEFORE the
