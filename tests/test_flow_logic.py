@@ -56,6 +56,15 @@ def test_volume_title_relabels_from_file_and_snaps_to_wikidata_casing():
         == "Prisons d'eau et de bois"
 
 
+def test_volume_title_keeps_wikidata_when_file_contains_it():
+    # File « L'Assassin royal (Tome 1) - L'Apprenti assassin »: keep the clean Wikidata sub-title,
+    # don't re-derive a noisy « L'Assassin royal - L'Apprenti assassin » (series name = the CYCLE,
+    # « Cycle de l'Assassin royal », so _clean_subtitle can't strip « L'Assassin royal »).
+    cand = _Cand("L'Assassin royal (Tome 1) - L'Apprenti assassin")
+    assert flow._volume_title(1, "L'Apprenti assassin", cand, "Cycle de l'Assassin royal", ["L'Apprenti assassin"]) \
+        == "L'Apprenti assassin"
+
+
 def test_volume_title_keeps_wikidata_when_file_agrees_or_number_differs():
     agree = _Cand("Les Aventuriers de la mer (Tome 1) - Le vaisseau magique")
     assert flow._volume_title(1, "Le Vaisseau magique", agree, "Les Aventuriers de la Mer", _KNOWN) \

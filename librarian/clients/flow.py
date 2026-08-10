@@ -424,6 +424,11 @@ def _volume_title(num: int | None, wiki_title: str, cand, series_name: str, know
     when the file's sub-title is just another volume of the same series."""
     if num is None or _detect_tome(cand.title) != num:
         return wiki_title
+    # The file already carries the canonical Wikidata sub-title (« L'Apprenti assassin » inside
+    # « L'Assassin royal (Tome 1) - L'Apprenti assassin ») → keep the clean Wikidata label instead
+    # of re-deriving a noisy one. Only re-derive when the file names a DIFFERENT volume.
+    if _norm_title(wiki_title) and _norm_title(wiki_title) in _norm_title(cand.title):
+        return wiki_title
     sub = _clean_subtitle(cand.title, series_name)
     if len(sub) < 3 or sub.lower() == wiki_title.lower():
         return wiki_title
