@@ -788,6 +788,7 @@ def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: s
     it needs enough of them to reach a genuine, downloadable EPUB (Aventuriers de la Mer T7
     had 10 valid editions among 45, but only mirror-less/corrupt ones fit in the old top-7)."""
     words = {w for w in re.sub(r"[^\w]", " ", vol.lower()).split() if len(w) > 3}
+    sub_words = _sig_words(vol)  # richer set incl. short significant words (« fou », « roi », « art »)
 
     def num_ok(r) -> bool:
         return num is not None and _detect_tome(r.title) == num
@@ -797,11 +798,16 @@ def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: s
 
     matches = [r for r in results if plausible(r)]
 
-    def rank(r) -> tuple[int, int, int, int, int]:
+    def rank(r) -> tuple[int, int, int, int, int, tuple]:
         author_ok = _author_match(r.author, author)
         lang_ok = bool(language and r.language and _lang_match(r.language, language))
         fmt_ok = bool(fmt and r.ext == fmt)
-        return (int(author_ok), int(lang_ok), int(fmt_ok), int(num_ok(r)), _edition_score(r, edition))
+        # How many of the sub-title's words the result actually carries. This distinguishes cycles
+        # of the SAME saga that share a word AND a tome number: « Le Fou et l'Assassin » T1 (overlap
+        # 2: fou+assassin) beats « L'Assassin royal » T1 (overlap 1: assassin) — a bare number match
+        # is no longer enough to pull in a different cycle's tome.
+        overlap = len(sub_words & _sig_words(r.title))
+        return (int(author_ok), int(lang_ok), int(fmt_ok), overlap, int(num_ok(r)), _edition_score(r, edition))
 
     matches.sort(key=rank, reverse=True)  # stable → keeps catalogue order within a tier
     # Guarantee edition diversity. Systematic « Série, Tome N — … » uploads frequently have NO

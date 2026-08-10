@@ -144,6 +144,29 @@ def test_pick_author_asks_when_ambiguous():
     assert ctx.asked and picked in ("Auteur Alpha", "Auteur Beta")
 
 
+# --- best_matches: sub-title overlap beats a bare tome-number match ----------
+class _MR:
+    def __init__(self, title):
+        self.title = title
+        self.author = "Robin Hobb"
+        self.ext = "epub"
+        self.language = "Français"
+        self.size_bytes = 1000
+        self.year = "2015"
+        self.ref = {}
+
+
+def test_best_matches_prefers_subtitle_overlap_over_bare_tome_number():
+    # Two cycles of the same saga share a word (« assassin ») AND tome number 1. The candidate that
+    # carries the WHOLE sub-title (« Le Fou et l'Assassin ») must win over another cycle's tome 1.
+    results = [
+        _MR("L'Assassin royal (Tome 1) - L'Apprenti assassin"),
+        _MR("Le Fou et l'Assassin (Tome 1)"),
+    ]
+    cands = flow._best_matches("Le Fou et l'Assassin", 1, results, language="fr", fmt="epub", author="Robin Hobb")
+    assert cands and "Fou" in cands[0].title
+
+
 # --- missing-volume note (unavailable tomes shown, not silently dropped) ----
 def test_missing_note_lists_unavailable_volumes():
     assert flow._missing_note([]) == ""
