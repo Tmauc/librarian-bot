@@ -91,6 +91,60 @@ async def _best_over(client, candidates, language, author) -> tuple[str, list[tu
     return best_author, best
 
 
+async def author_series(author: str, language: str = "fr") -> list[tuple[str, str, int]]:
+    """Every series with ≥2 written-work volumes authored by ``author``, as
+    ``(series_qid, label, volume_count)`` sorted by count desc. Labels come back in ``language``
+    first — this is how « Cycle du Prophète Blanc » surfaces (a French cycle name Wikidata will NOT
+    return from a « L'Assassin Royal » title search: that only yields the English « Farseer
+    Trilogy »). Lets the flow offer the author's series so the user picks the right cycle. Soft-fails → []."""
+    if not author.strip():
+        return []
+    langs = f"{language},en" if language and language != "en" else "en"
+    try:
+        async with httpx.AsyncClient(timeout=25, headers=_UA) as client:
+            resp = await client.get(_API, params={
+                "action": "wbsearchentities", "search": author,
+                "language": language or "en", "type": "item", "format": "json", "limit": 5,
+            })
+            resp.raise_for_status()
+            aqids = [r["id"] for r in resp.json().get("search", []) if r.get("id", "").startswith("Q")]
+            for aqid in aqids[:3]:
+                query = (
+                    "SELECT ?series ?seriesLabel (COUNT(DISTINCT ?vol) AS ?n) WHERE {"
+                    f"  ?vol wdt:P50 wd:{aqid} . ?vol wdt:P179 ?series ."
+                    f"  ?vol wdt:P31/wdt:P279* {_WRITTEN_WORK} ."
+                    f'  SERVICE wikibase:label {{ bd:serviceParam wikibase:language "{langs}". }}'
+                    "} GROUP BY ?series ?seriesLabel HAVING(?n >= 2) ORDER BY DESC(?n)"
+                )
+                r2 = await client.get(_SPARQL, params={"query": query, "format": "json"})
+                r2.raise_for_status()
+                out: list[tuple[str, str, int]] = []
+                for b in r2.json()["results"]["bindings"]:
+                    qid = b.get("series", {}).get("value", "").rsplit("/", 1)[-1]
+                    label = b.get("seriesLabel", {}).get("value", "").strip()
+                    n = int(b.get("n", {}).get("value", "0"))
+                    if qid.startswith("Q") and label and not (label.startswith("Q") and label[1:].isdigit()):
+                        out.append((qid, label, n))
+                if out:
+                    return out
+            return []
+    except Exception as e:
+        logger.warning(f"Wikidata author_series failed for {author!r}: {e}")
+        return []
+
+
+async def volumes_of(qid: str, language: str = "fr", author: str = "") -> list[tuple[int | None, str]]:
+    """Ordered volumes of a specific series ENTITY (by QID), skipping the wbsearch step — used once
+    the user has picked a series from the author's list."""
+    try:
+        async with httpx.AsyncClient(timeout=25, headers=_UA) as client:
+            vols, _ = await _members(client, qid, language, author)
+            return vols
+    except Exception as e:
+        logger.warning(f"Wikidata volumes_of failed for {qid}: {e}")
+        return []
+
+
 def _author_filter(author: str) -> str:
     """A SPARQL fragment requiring the volume's author (P50) label to contain every word
     of ``author`` (so « Frank Herbert » ≠ « Brian Herbert »). Empty if no author."""

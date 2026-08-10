@@ -65,6 +65,41 @@ def test_volume_title_keeps_wikidata_when_file_agrees_or_number_differs():
         == "L'Assassin du roi"
 
 
+# --- series disambiguation (pick the right cycle of a saga) -----------------
+def test_sig_words_drops_articles_and_cycle_words():
+    assert flow._sig_words("l'assassin royal deuxième cycle") == {"assassin", "royal", "deuxieme"}
+    assert flow._sig_words("Les Aventuriers de la Mer") == {"aventuriers", "mer"}
+    assert flow._sig_words("Cycle du Prophète Blanc") == {"prophete", "blanc"}
+
+
+_HOBB_SERIES = [
+    ("Q2197634", "Les Cités des Anciens", 11),
+    ("Q2113889", "Cycle du Prophète Blanc", 9),
+    ("Q2211517", "Les Aventuriers de la mer", 7),
+    ("Q2512889", "Cycle de l'Assassin royal", 7),
+    ("Q99372737", "Cycle du Fou et de l'Assassin", 6),
+]
+
+
+def test_series_decision_picks_one_clear_match():
+    mode, hit = flow._series_decision("les aventuriers de la mer", _HOBB_SERIES)
+    assert mode == "pick" and hit[1] == "Les Aventuriers de la mer"
+    # « l'assassin royal » alone → only « Cycle de l'Assassin royal » has both words
+    mode, hit = flow._series_decision("l'assassin royal", _HOBB_SERIES)
+    assert mode == "pick" and hit[1] == "Cycle de l'Assassin royal"
+
+
+def test_series_decision_asks_when_ambiguous():
+    # no label contains « deuxieme » → 0 strong match → ask
+    assert flow._series_decision("l'assassin royal deuxième cycle", _HOBB_SERIES) == ("ask", None)
+    # « assassin » matches TWO cycles → ask
+    assert flow._series_decision("assassin", _HOBB_SERIES) == ("ask", None)
+
+
+def test_series_decision_noop_for_single_series():
+    assert flow._series_decision("dune", [("Q1", "Dune", 6)]) == (None, None)
+
+
 # --- missing-volume note (unavailable tomes shown, not silently dropped) ----
 def test_missing_note_lists_unavailable_volumes():
     assert flow._missing_note([]) == ""

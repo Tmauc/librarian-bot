@@ -299,7 +299,7 @@ async def run_search(ctx: ClientContext, query: str) -> None:
         # Language detection is trivial and reliable — never trust the LLM to have caught
         # « en vf »; fill it in deterministically so the French filter always applies.
         p.language = p.language or _detect_language(query)
-        await _run_batch(ctx, p)
+        await _run_batch(ctx, p, query)  # raw query drives cycle disambiguation (« deuxième cycle »)
         return
 
     await ctx.say("🔍 Recherche en cours…")
@@ -444,12 +444,74 @@ def _missing_note(missing: list[tuple]) -> str:
     return f"\n\n⚠️ Introuvable(s) dans le catalogue :\n{lines}"
 
 
-async def _run_batch(ctx: ClientContext, plan) -> None:
+_SERIES_STOPWORDS = {
+    "le", "la", "les", "l", "de", "du", "des", "d", "un", "une", "et", "the", "of", "a",
+    "cycle", "cycles", "saga", "serie", "series", "integrale", "tome", "tomes", "coffret", "trilogie",
+}
+
+
+def _sig_words(text: str) -> set[str]:
+    """Significant, accent-folded words of a query/label (drops articles + « cycle/saga/tome »),
+    used to tell whether a query clearly names one of an author's series."""
+    t = unicodedata.normalize("NFKD", text.lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return {w for w in re.findall(r"[a-z0-9]+", t) if len(w) >= 2 and w not in _SERIES_STOPWORDS}
+
+
+def _series_decision(raw_query: str, options: list[tuple[str, str, int]]):
+    """Decide how to resolve an ambiguous saga from the author's series list. Returns
+    ``("pick", (qid, label, n))`` when the query's significant words all appear in exactly ONE
+    series label, ``("ask", None)`` when it's ambiguous (0 or several match → menu), or
+    ``(None, None)`` when there's nothing to disambiguate (≤1 series)."""
+    if len(options) <= 1:
+        return None, None
+    q = _sig_words(raw_query)
+    strong = [s for s in options if q and q <= _sig_words(s[1])]  # every query word is in the label
+    return ("pick", strong[0]) if len(strong) == 1 else ("ask", None)
+
+
+async def _disambiguate_series(ctx, raw_query, author, language, default_vols, default_name):
+    """A saga split into cycles (« L'Assassin Royal » → Cycle de l'Assassin royal / du Prophète
+    Blanc / du Fou et de l'Assassin) can't be told apart from the title alone, and Wikidata only
+    returns the FIRST (English) cycle. Going via the AUTHOR lists every cycle with its French name.
+    If the query clearly names ONE series we use it; otherwise the user picks from a menu. Returns
+    ``(volumes, series_name)`` — the defaults untouched when there's nothing to disambiguate."""
+    options = await series.author_series(author, language or "fr")
+    mode, hit = _series_decision(raw_query, options)
+    if mode is None:
+        return default_vols, default_name
+    if mode == "pick":
+        qid, label = hit[0], hit[1]
+    else:  # ambiguous → let the user choose
+        choices = [Choice(f"{label}  ·  {n} tome(s)", qid) for qid, label, n in options]
+        choices.append(Choice("↩︎ Garder ma recherche", "__keep__"))
+        pick = await ctx.ask_choice(
+            Card(
+                title=f"📚 Séries de {author}",
+                description=f"« {raw_query} » peut désigner plusieurs séries — laquelle ?",
+                footer="Choisis la série / le cycle",
+            ),
+            choices,
+        )
+        if pick == "__keep__":
+            return default_vols, default_name
+        qid = pick
+        label = next((lbl for q2, lbl, _ in options if q2 == pick), default_name)
+    vols = await series.volumes_of(qid, language or "fr", author)
+    return (vols or default_vols), (label if vols else default_name)
+
+
+async def _run_batch(ctx: ClientContext, plan, raw_query: str = "") -> None:
     """Identify the series (Wikidata → canonical ordered volumes), find each volume's file
     in the catalogue (in the requested language), and let the user multi-select the tomes.
     Falls back to raw catalogue results if the series is unknown to Wikidata."""
     await ctx.say(f"🔎 Identification de « {plan.query} »…")
     wiki_author, vols = await series.resolve(plan.query, plan.language or "fr", plan.author)
+    author = plan.author or wiki_author
+    if author:  # let the user pick the right cycle when a saga is ambiguous (see _disambiguate_series)
+        vols, plan.query = await _disambiguate_series(
+            ctx, raw_query or plan.query, author, plan.language, vols, plan.query
+        )
     if vols:
         await ctx.update_status(
             f"📚 {len(vols)} tome(s) identifié(s) — recherche des fichiers dans le catalogue…", _cancel_btn()
