@@ -379,6 +379,49 @@ def _lang_match(result_language: str, code: str) -> bool:
     return any(rl.startswith(p) for p in _LANG_NAMES.get(code, (code,)))
 
 
+def _known_lang(result_language: str) -> str | None:
+    """The language a result is CONFIDENTLY tagged with, or None when the tag is empty or not
+    a language at all (Anna sometimes drops « EPUB »/« RTF » into the language column). Used to
+    reject a confidently wrong-language edition without discarding untagged (unknown) ones."""
+    rl = (result_language or "").lower().strip()
+    if not rl:
+        return None
+    for code, prefixes in _LANG_NAMES.items():
+        if any(rl.startswith(p) for p in prefixes):
+            return code
+    return None
+
+
+_LANG_DISPLAY = {"fr": "français", "en": "anglais", "es": "espagnol", "de": "allemand", "it": "italien"}
+
+
+def _lang_display(code: str | None) -> str:
+    """A French adjective for a language code, for the « proposé en VO (anglais) » label. Falls
+    back to « VO » when the edition's language is unknown (untagged/format-in-language column)."""
+    return _LANG_DISPLAY.get(code or "", "VO")
+
+
+_LANG_HINT_WORDS = {
+    "fr": {"le", "la", "les", "l", "un", "une", "du", "de", "des", "d", "au", "aux", "et", "dans", "sur", "pour"},
+    "en": {"the", "of", "and", "a", "an", "to", "in"},
+    "es": {"el", "la", "los", "las", "un", "una", "de", "del", "y"},
+    "de": {"der", "die", "das", "und", "ein", "eine", "zur", "zum", "von"},
+    "it": {"il", "la", "le", "lo", "gli", "un", "una", "di", "del", "e"},
+}
+
+
+def _title_reads_as(title: str, code: str) -> bool:
+    """Heuristic: does this title read as language ``code``? True when it carries that language's
+    function words (or, for French, an accented letter). Used to tell a genuinely French Wikidata
+    volume title (« Le Dieu des flammes ») from an English fallback (« The Burning God »), so an
+    untagged catalogue match isn't mislabeled VF when Wikidata only had the original-language name."""
+    low = title.lower()
+    if code == "fr" and re.search(r"[àâäçéèêëîïôöùûüœ]", low):
+        return True
+    words = set(re.findall(r"[a-zà-ÿ']+", low))
+    return bool(words & _LANG_HINT_WORDS.get(code, set()))
+
+
 def _detect_tome(title: str) -> int | None:
     """Best-effort volume number from a catalogue title (tome N / TNN / (… N))."""
     t = title.lower()
@@ -559,22 +602,33 @@ async def _run_batch(ctx: ClientContext, plan, raw_query: str = "") -> None:
         await ctx.update_status(
             f"📚 {len(vols)} tome(s) identifié(s) — recherche des fichiers dans le catalogue…", _cancel_btn()
         )
-    entries, missing = await _series_entries(ctx, plan, vols, author) if vols else ([], [])
+    entries, missing, foreign = await _series_entries(ctx, plan, vols, author) if vols else ([], [], [])
 
-    if entries:  # clean, ordered "Tome N — title" → several candidate editions
+    if entries or foreign:  # clean, ordered "Tome N — title" → several candidate editions
         # Make each tome's LABEL follow the file that will actually be delivered — BEFORE the
         # card. Wikidata's title-order can disagree with the edition's numbering (Aventuriers
         # T5/T6, T7/T9); the « tome N » match pulls the real tome N into slot N, so the label
         # (and thus the order the user SEES) must come from that file, not the catalogue guess.
         known_titles = [t for _, t, _ in entries]
         entries = [(n, _volume_title(n, t, cands[0], plan.query, known_titles), cands) for n, t, cands in entries]
-        choices = [
-            Choice(_vol_label(n, t), str(i), description=_meta_line(cands[0]))
-            for i, (n, t, cands) in enumerate(entries)
-        ]
+        # Selectable = the VF tomes, then the VO-only tomes (marked, checkable but clearly « VF
+        # indispo »). A ("vf"/"vo", num, title, cands) tuple carries which kind each row is so the
+        # download hint tags the file's real language (never tag a VO edition as French).
+        selectable = [("vf", n, t, c) for n, t, c in entries] + [("vo", n, t, c) for n, t, c in foreign]
+        choices = []
+        for i, (kind, n, t, cands) in enumerate(selectable):
+            if kind == "vf":
+                choices.append(Choice(_vol_label(n, t), str(i), description=_meta_line(cands[0])))
+            else:
+                lg = _lang_display(_known_lang(cands[0].language))
+                choices.append(Choice(f"🌍 {_vol_label(n, t)} · VF indispo", str(i),
+                                      description=f"VF introuvable — proposé en VO ({lg})"))
+        head = f"{len(entries)} tome(s) en VF"
+        if foreign:
+            head += f" · {len(foreign)} en VO seulement (🌍)"
         card = Card(
             title=f"🧠 {plan.query}",
-            description=f"{len(entries)} tome(s) trouvé(s) — coche ceux à télécharger :" + _missing_note(missing),
+            description=f"{head} — coche ceux à télécharger :" + _missing_note(missing),
             footer="Série identifiée via Wikidata + catalogue",
         )
         picked = await ctx.ask_multi_choice(card, choices)
@@ -586,9 +640,13 @@ async def _run_batch(ctx: ClientContext, plan, raw_query: str = "") -> None:
         # picks unordered (a set), which made downloads look random.
         chosen = []
         for v in _in_display_order(picked):
-            num, title, cands = entries[int(v)]
-            hint = BookMeta(title=title, author=series_author, series=plan.query, index=num, language=plan.language)
-            chosen.append((_vol_label(num, title), cands, hint))
+            kind, num, title, cands = selectable[int(v)]
+            # A VO edition is not French: leave its language unset so metadata doesn't mislabel it,
+            # and tag the tome « (VO) » so the delivered file / folder is unambiguous.
+            vol_lang = plan.language if kind == "vf" else ""
+            label = _vol_label(num, title) + ("" if kind == "vf" else " (VO)")
+            hint = BookMeta(title=title, author=series_author, series=plan.query, index=num, language=vol_lang)
+            chosen.append((label, cands, hint))
     else:  # fallback: unknown series → raw catalogue, user sorts it out
         await ctx.say(f"🔎 Recherche de « {plan.query} »…")
         results = await search_service.search(plan.query, ctx.max_file_size)
@@ -696,10 +754,32 @@ async def _series_entries(ctx: ClientContext, plan, vols: list[tuple], resolved_
     searches = await asyncio.gather(*[_search_volume(ctx, plan.query, num, title, author) for num, title in vols])
     entries: list[tuple] = []
     missing: list[tuple] = []
+    foreign: list[tuple] = []  # no VF edition, but the volume exists in the original (VO) language
     covered: set[int] = set()
     for (num, title), results in zip(vols, searches, strict=True):
         cands = _best_matches(title, num, results, lang, fmt, author, edition)
-        if cands:
+        # Is the volume genuinely available in the requested language, or did `cands` only survive
+        # because some editions are UNTAGGED (unknown language)? Trust it as VF when a candidate is
+        # positively tagged that language, OR carries a native tome marker, OR the Wikidata title
+        # itself reads as that language (so untagged catalogue matches are trustworthy). Otherwise
+        # Wikidata only had the ORIGINAL-language title (« The Burning God » for tome 3) and the
+        # untagged matches are that VO edition — offer it as VO, don't pass it off as VF.
+        native = not lang or _title_reads_as(title, lang) or any(
+            _known_lang(c.language) == lang or (num is not None and _detect_tome(c.title) == num) for c in cands
+        )
+        if cands and native:
+            entries.append((num, title, cands))
+            if num is not None:
+                covered.add(num)
+            continue
+        # Offer the ORIGINAL-version (VO, English first — the usual "autre langue" for these series)
+        # so the user can still grab it, rather than silently auto-picking a wrong-/unknown-language
+        # book into the VF set. « La Guerre du pavot » tome 3 (« Le Dieu des flammes ») isn't on the
+        # catalogue in French yet, only EN/DE/ES → shown VF-indispo, VO offered.
+        vo = _best_matches(title, num, results, "en", fmt, author, edition) if lang and lang != "en" else []
+        if vo:
+            foreign.append((num, title, vo))
+        elif cands:  # ambiguous untagged file, no VO alternative either → keep it rather than lose it
             entries.append((num, title, cands))
             if num is not None:
                 covered.add(num)
@@ -724,10 +804,12 @@ async def _series_entries(ctx: ClientContext, plan, vols: list[tuple], resolved_
 
     entries = _dedupe_entries(entries)
     entries.sort(key=lambda e: (e[0] is None, e[0] if e[0] is not None else 0))
-    # A backfilled tome number is no longer "missing"; keep the rest, in tome order.
+    # A backfilled tome number is no longer "missing" nor VO-only; keep the rest, in tome order.
     missing = [(n, t) for n, t in missing if n is None or n not in covered]
+    foreign = [(n, t, c) for n, t, c in foreign if n is None or n not in covered]
     missing.sort(key=lambda m: (m[0] is None, m[0] if m[0] is not None else 0))
-    return entries, missing
+    foreign.sort(key=lambda f: (f[0] is None, f[0] if f[0] is not None else 0))
+    return entries, missing, foreign
 
 
 def _author_match(result_author: str, author: str) -> bool:
@@ -806,6 +888,14 @@ def _best_matches(vol: str, num: int | None, results, language: str = "", fmt: s
         return num_ok(r) or not words or any(w in r.title.lower() for w in words)
 
     matches = [r for r in results if plausible(r)]
+    if language:
+        # Never let a confidently wrong-language edition win a language-targeted (VF/VO) batch.
+        # This is the « la guerre du pavot » tome-3 bug: Wikidata had no French title (only
+        # « The Burning God »), no French edition exists in the catalogue, and a GERMAN volume
+        # won on the tome number alone. Drop editions tagged a *different* language; keep untagged
+        # ones (language simply unknown). If nothing survives, the volume is reported
+        # « indisponible » rather than downloaded in the wrong language.
+        matches = [r for r in matches if _known_lang(r.language) in (None, language)]
 
     def rank(r) -> tuple[int, int, int, int, int, tuple]:
         author_ok = _author_match(r.author, author)

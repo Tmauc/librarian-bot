@@ -165,6 +165,39 @@ class _MR:
         self.ref = {}
 
 
+def test_known_lang_only_recognizes_real_languages():
+    assert flow._known_lang("French") == "fr"
+    assert flow._known_lang("Deutsch") == "de"
+    assert flow._known_lang("") is None
+    assert flow._known_lang("EPUB") is None   # Anna puts the format in the language column
+    assert flow._known_lang("RTF") is None
+
+
+def test_best_matches_drops_wrong_language_even_on_tome_number_match():
+    # « La Guerre du pavot » tome 3: Wikidata had no French title (« The Burning God »), no French
+    # edition exists, and a GERMAN volume matched on the tome number alone. A VF batch must NOT
+    # keep it — untagged (unknown-language) editions are still allowed through.
+    de = _MR("Im Zeichen der Mohnblume - Die Erlöserin (Die Legende der Schamanin 3)")
+    de.language = "German"
+    untagged = _MR("THE BURNING GOD")
+    untagged.language = "RTF"  # format-in-language column → treated as unknown, kept
+    cands = flow._best_matches("The Burning God", 3, [de, untagged], language="fr", fmt="epub", author="")
+    titles = [c.title for c in cands]
+    assert "Im Zeichen der Mohnblume - Die Erlöserin (Die Legende der Schamanin 3)" not in titles
+    assert "THE BURNING GOD" in titles
+
+
+def test_title_reads_as_tells_french_from_english_fallback():
+    # A genuinely French Wikidata title vs an English fallback (« The Burning God »): the latter
+    # must NOT read as French, so its untagged catalogue matches are offered as VO, not passed as VF.
+    assert flow._title_reads_as("Le Dieu des flammes", "fr") is True
+    assert flow._title_reads_as("La République du Dragon", "fr") is True
+    assert flow._title_reads_as("Prisons d'eau et de bois", "fr") is True   # accented / articles
+    assert flow._title_reads_as("The Burning God", "fr") is False
+    assert flow._title_reads_as("The Dragon Republic", "fr") is False
+    assert flow._title_reads_as("The Burning God", "en") is True
+
+
 def test_best_matches_prefers_subtitle_overlap_over_bare_tome_number():
     # Two cycles of the same saga share a word (« assassin ») AND tome number 1. The candidate that
     # carries the WHOLE sub-title (« Le Fou et l'Assassin ») must win over another cycle's tome 1.
