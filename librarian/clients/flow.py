@@ -581,7 +581,7 @@ async def _run_batch(ctx: ClientContext, plan, raw_query: str = "") -> None:
         # One canonical author for the WHOLE series, stable across runs so tomes never
         # split into two folders: the user's stated author → Wikidata's P50 → a best-guess
         # from the matched editions (each normalised for name order / translators).
-        series_author = metadata.clean_author(plan.author or wiki_author or _dominant_author(entries))
+        series_author = metadata.clean_author(author or _dominant_author(entries))
         # Download in the ORDER SHOWN (tome order) — the multi-select may hand back the
         # picks unordered (a set), which made downloads look random.
         chosen = []
