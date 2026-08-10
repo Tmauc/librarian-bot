@@ -472,6 +472,30 @@ def _series_decision(raw_query: str, options: list[tuple[str, str, int]]):
     return ("pick", strong[0]) if len(strong) == 1 else ("ask", None)
 
 
+async def _pick_author(ctx, query, results):
+    """Identify the series' author from catalogue results. Returns the clearly-dominant author, or —
+    when several are plausible (no ≥60 % / not ≥2× the runner-up) — lets the user pick « de quel
+    auteur parles-tu ? ». Empty when nothing usable."""
+    authors = _catalogue_authors(results)
+    if not authors:
+        return ""
+    total = sum(c for _, c in authors)
+    top_name, top_c = authors[0]
+    if len(authors) == 1 or top_c >= 0.6 * total or top_c >= 2 * authors[1][1]:
+        return top_name
+    choices = [Choice(f"{name}  ·  {c} livre(s)", name) for name, c in authors[:8]]
+    choices.append(Choice("↩︎ Garder ma recherche", "__keep__"))
+    pick = await ctx.ask_choice(
+        Card(
+            title="✍️ Plusieurs auteurs",
+            description=f"« {query} » correspond à plusieurs auteurs — lequel cherches-tu ?",
+            footer="Choisis l'auteur / la saga",
+        ),
+        choices,
+    )
+    return "" if pick == "__keep__" else pick
+
+
 async def _disambiguate_series(ctx, raw_query, author, language, default_vols, default_name):
     """A saga split into cycles (« L'Assassin Royal » → Cycle de l'Assassin royal / du Prophète
     Blanc / du Fou et de l'Assassin) can't be told apart from the title alone, and Wikidata only
@@ -513,8 +537,9 @@ async def _run_batch(ctx: ClientContext, plan, raw_query: str = "") -> None:
     if not author:
         # Wikidata missed the series (a French title without its exact article — « Assassin Royal »
         # resolves to nothing). Identify the author from the CATALOGUE instead (Anna covers French
-        # titles far better) so the cycle menu can still fire: « Assassin Royal » → Robin Hobb.
-        author = _dominant_result_author(await search_service.search(plan.query, ctx.max_file_size))
+        # titles far better) so the cycle menu can still fire: « Assassin Royal » → Robin Hobb. If
+        # several authors are plausible, ask which one.
+        author = await _pick_author(ctx, plan.query, await search_service.search(plan.query, ctx.max_file_size))
     if author:  # let the user pick the right cycle when a saga is ambiguous (see _disambiguate_series)
         vols, plan.query = await _disambiguate_series(
             ctx, raw_query or plan.query, author, plan.language, vols, plan.query
@@ -1012,12 +1037,20 @@ def _dominant_author(entries: list[tuple]) -> str:
     return Counter(names).most_common(1)[0][0] if names else ""
 
 
-def _dominant_result_author(results) -> str:
-    """Most common cleaned author across raw catalogue results — used to identify a series' author
-    when Wikidata can't resolve the (French) title (« Assassin Royal » → « Robin Hobb »)."""
-    names = [metadata.clean_author(r.author) for r in results if r.author]
-    names = [n for n in names if n]
-    return Counter(names).most_common(1)[0][0] if names else ""
+def _catalogue_authors(results) -> list[tuple[str, int]]:
+    """Distinct authors across catalogue results, grouped by name word-set so « Robin Hobb » ==
+    « Hobb, Robin » == « Hobb, Robin [Hobb, Robin] », most frequent first with a book count. Used
+    to identify a series' author when Wikidata can't resolve the (French) title, and to ask which
+    author when several are plausible."""
+    groups: dict[frozenset, Counter] = {}
+    for r in results:
+        a = metadata.clean_author(r.author or "")
+        key = frozenset(_sig_words(a))
+        if a and key:
+            groups.setdefault(key, Counter())[a] += 1
+    out = [(forms.most_common(1)[0][0], sum(forms.values())) for forms in groups.values()]
+    out.sort(key=lambda x: -x[1])
+    return out
 
 
 def _build_filename(meta: BookMeta, fallback_title: str, ext: str) -> str:

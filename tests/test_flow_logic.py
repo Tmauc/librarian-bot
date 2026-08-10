@@ -1,4 +1,5 @@
 """Locks for flow-level logic: email validation, offerable formats, dedup."""
+import asyncio
 
 import pytest
 
@@ -104,6 +105,43 @@ def test_series_decision_ignores_language_and_intent_noise():
     # « en vf » / « intégrale » must not force the menu when the query names one series
     mode, hit = flow._series_decision("l'intégrale des aventuriers de la mer en vf", _HOBB_SERIES)
     assert mode == "pick" and hit[1] == "Les Aventuriers de la mer"
+
+
+# --- author identification from the catalogue (+ menu when ambiguous) --------
+class _Res:
+    def __init__(self, author):
+        self.author = author
+
+
+def test_catalogue_authors_groups_name_variants():
+    results = [_Res("Robin Hobb")] * 14 + [_Res("Hobb, Robin")] * 2 + [_Res("George R.R. Martin")] * 3
+    authors = flow._catalogue_authors(results)
+    assert authors[0][1] == 16 and {"robin", "hobb"} <= flow._sig_words(authors[0][0])  # variants merged
+    assert authors[1][1] == 3
+
+
+def test_pick_author_returns_dominant_without_asking():
+    class Ctx:
+        async def ask_choice(self, *a):
+            raise AssertionError("dominant author → must not ask")
+
+    res = [_Res("Robin Hobb")] * 10 + [_Res("Autre Auteur")] * 1
+    assert asyncio.run(flow._pick_author(Ctx(), "q", res)) == "Robin Hobb"
+
+
+def test_pick_author_asks_when_ambiguous():
+    class Ctx:
+        def __init__(self):
+            self.asked = False
+
+        async def ask_choice(self, card, choices):
+            self.asked = True
+            return choices[0].value
+
+    ctx = Ctx()
+    res = [_Res("Auteur Alpha")] * 5 + [_Res("Auteur Beta")] * 4  # 5 vs 4 → no clear dominant
+    picked = asyncio.run(flow._pick_author(ctx, "q", res))
+    assert ctx.asked and picked in ("Auteur Alpha", "Auteur Beta")
 
 
 # --- missing-volume note (unavailable tomes shown, not silently dropped) ----
