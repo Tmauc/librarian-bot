@@ -512,23 +512,27 @@ async def _disambiguate_series(ctx, raw_query, author, language, default_vols, d
     if mode is None:
         return default_vols, default_name
     if mode == "pick":
-        qid, label = hit[0], hit[1]
-    else:  # ambiguous → let the user choose
-        choices = [Choice(f"{label}  ·  {n} tome(s)", qid) for qid, label, n in options]
-        choices.append(Choice("↩︎ Garder ma recherche", "__keep__"))
-        pick = await ctx.ask_choice(
-            Card(
-                title=f"📚 Séries de {author}",
-                description=f"« {raw_query} » peut désigner plusieurs séries — laquelle ?",
-                footer="Choisis la série / le cycle",
-            ),
-            choices,
-        )
-        if pick == "__keep__":
-            return default_vols, default_name
-        qid = pick
-        label = next((lbl for q2, lbl, _ in options if q2 == pick), default_name)
-    vols = await series.volumes_of(qid, language or "fr", author)
+        vols = await series.volumes_of(hit[0], language or "fr", author)
+        return (vols or default_vols), (hit[1] if vols else default_name)
+    # Ambiguous → menu. author_series' count is Wikidata's raw COUNT (includes omnibus editions +
+    # duplicates), so resolve the REAL tome list for each option (in parallel) and show that count —
+    # « Cycle du Prophète Blanc · 7 tome(s) », not the misleading 9. Reuse the vols for the pick.
+    real = await asyncio.gather(*[series.volumes_of(q, language or "fr", author) for q, _, _ in options])
+    vols_by_qid = {q: v for (q, _, _), v in zip(options, real, strict=True)}
+    choices = [Choice(f"{label}  ·  {len(vols_by_qid[q])} tome(s)", q) for q, label, _ in options if vols_by_qid[q]]
+    choices.append(Choice("↩︎ Garder ma recherche", "__keep__"))
+    pick = await ctx.ask_choice(
+        Card(
+            title=f"📚 Séries de {author}",
+            description=f"« {raw_query} » peut désigner plusieurs séries — laquelle ?",
+            footer="Choisis la série / le cycle",
+        ),
+        choices,
+    )
+    if pick == "__keep__":
+        return default_vols, default_name
+    vols = vols_by_qid.get(pick, [])
+    label = next((lbl for q2, lbl, _ in options if q2 == pick), default_name)
     return (vols or default_vols), (label if vols else default_name)
 
 
