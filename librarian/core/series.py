@@ -24,6 +24,20 @@ _UA = {"User-Agent": "librarian-bot/2.x (series lookup)"}
 _API = "https://www.wikidata.org/w/api.php"
 _SPARQL = "https://query.wikidata.org/sparql"
 
+_OMNI_SEP = re.compile(r"\s*/\s*")
+
+
+def _omnibus_parts(label: str) -> list[str]:
+    """Split a combined « Titre A / Titre B » omnibus label into its parts. Wikidata lists one
+    row for two bound-together volumes (« Le Dragon des glaces /L'Homme noir »), and the slash may
+    be spaced on EITHER side only. We require whitespace next to the slash — so « AC/DC », a
+    fraction, or « N/A » stay whole — and each part to be substantial. Returns ``[label]`` when it
+    is not an omnibus."""
+    if not re.search(r"\s/|/\s", label):
+        return [label]
+    parts = [p.strip() for p in _OMNI_SEP.split(label) if len(p.strip()) >= 3]
+    return parts if len(parts) > 1 else [label]
+
 
 async def volumes(name: str, language: str = "fr", author: str = "") -> list[tuple[int | None, str]]:
     """Ordered volumes only (see :func:`resolve`)."""
@@ -128,10 +142,11 @@ async def _members(client, qid, language, author="") -> tuple[list[tuple[int | N
             authors.append(al)
         ordv = b.get("ord", {}).get("value", "")
         ordn = int(ordv) if ordv.isdigit() else None
-        is_omni = " / " in label  # « Tome A / Tome B » combined edition
+        parts = _omnibus_parts(label)  # « Tome A / Tome B » combined edition → [A, B]
+        is_omni = len(parts) > 1
         rows.append((ordn, label, is_omni))
         if is_omni:
-            omni_titles.update(p.strip().lower() for p in label.split(" / "))
+            omni_titles.update(p.lower() for p in parts)
 
     out: list[tuple[int | None, str]] = []
     seen: set[str] = set()
@@ -143,7 +158,7 @@ async def _members(client, qid, language, author="") -> tuple[list[tuple[int | N
         # lists is redundant (the omnibus places it better). An omnibus is a source of TITLES
         # to search individually — never downloaded as one file.
         for _, label, is_omni in sorted(rows, key=lambda r: (r[0] is None, r[0] or 0)):
-            for part in ([p.strip() for p in label.split(" / ")] if is_omni else [label]):
+            for part in (_omnibus_parts(label) if is_omni else [label]):
                 key = part.lower()
                 if not part or key in seen or (not is_omni and key in omni_titles):
                     continue

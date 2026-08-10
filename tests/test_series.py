@@ -77,6 +77,38 @@ def test_resolve_recovers_missing_volume_from_omnibus(monkeypatch):
     assert vols == [(1, "L'Apprenti assassin"), (2, "L'Assassin du roi"), (3, "La Nef du crépuscule")]
 
 
+def test_omnibus_parts_splits_on_a_loosely_spaced_slash():
+    from librarian.core.series import _omnibus_parts
+
+    # Wikidata spaces the slash on only ONE side (the Tawny Man Trilogy bug)
+    assert _omnibus_parts("Le Dragon des glaces /L'Homme noir") == ["Le Dragon des glaces", "L'Homme noir"]
+    assert _omnibus_parts("L'Assassin du roi / La Nef du crépuscule") == ["L'Assassin du roi", "La Nef du crépuscule"]
+    # NOT an omnibus: slash without adjacent whitespace, or trivial parts
+    assert _omnibus_parts("AC/DC Live") == ["AC/DC Live"]
+    assert _omnibus_parts("Un seul titre") == ["Un seul titre"]
+
+
+def test_resolve_splits_loose_slash_omnibus_and_dedupes(monkeypatch):
+    # « Le Dragon des glaces /L'Homme noir » (space only before the slash) must split into two
+    # ordered volumes; the standalone « Le Dragon des glaces » row must not duplicate it.
+    api = {"search": [{"id": "Q1"}]}
+    sparql = {"results": {"bindings": [
+        {"volLabel": {"value": "Le Prophète blanc"}, "ord": {"value": "1"}, "authorLabel": {"value": "Robin Hobb"}},
+        {"volLabel": {"value": "Le Dragon des glaces /L'Homme noir"}, "ord": {"value": "2"},
+         "authorLabel": {"value": "Robin Hobb"}},
+        {"volLabel": {"value": "Adieux et Retrouvailles"}, "ord": {"value": "3"}, "authorLabel": {"value": "Robin Hobb"}},
+        {"volLabel": {"value": "Le Dragon des glaces"}, "ord": {"value": "4"}, "authorLabel": {"value": "Robin Hobb"}},
+    ]}}
+    _install(monkeypatch, api, sparql)
+    _, vols = asyncio.run(series.resolve("The Tawny Man Trilogy"))
+    assert vols == [
+        (1, "Le Prophète blanc"),
+        (2, "Le Dragon des glaces"),
+        (3, "L'Homme noir"),
+        (4, "Adieux et Retrouvailles"),
+    ]
+
+
 def test_author_filter_requires_every_name_word():
     from librarian.core.series import _author_filter
 
