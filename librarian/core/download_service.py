@@ -30,3 +30,12 @@ async def details(result: SearchResult) -> dict:
     if source is None:
         return {}
     return await source.details(result)
+
+
+async def available(result: SearchResult) -> bool:
+    """Best-effort liveness check via the owning source, for pre-filtering dead-mirror books
+    out of the offered list. Fail soft: an unknown source or a probe error keeps the result."""
+    source = registry.get(result.source)
+    if source is None:
+        return True
+    return await source.available(result)

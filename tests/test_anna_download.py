@@ -83,6 +83,50 @@ def test_get_download_links_collapses_variants_and_caps(monkeypatch):
     assert all("?" not in u for u in fast + slow)  # tracking-query variants stripped
 
 
+def test_has_live_mirror_distinguishes_gated_from_external():
+    gated = [f"https://annas-archive.gl/fast_download/{MD5}/0/0",
+             f"https://annas-archive.gl/slow_download/{MD5}/0/0"]
+    assert anna._has_live_mirror(gated) is False
+    assert anna._has_live_mirror([*gated, "https://libgen.li/file.php?id=123"]) is True
+
+
+def test_available_false_when_only_gated_endpoints(monkeypatch):
+    # « Ceux qui restent » reality: the md5 page yields ONLY membership/DDoS-gated endpoints →
+    # the book is dead and must NOT be offered.
+    monkeypatch.setattr(anna, "_is_safe_url", lambda u: True)
+    src = anna.AnnaArchiveSource("https://annas-archive.gl")
+    monkeypatch.setattr(src, "_client", lambda timeout: _FakeClient([]))
+    ok = asyncio.run(src.available(SearchResult("anna", "x", "epub", ref={"md5": MD5})))
+    assert ok is False
+
+
+def test_available_true_when_an_external_mirror_exists(monkeypatch):
+    monkeypatch.setattr(anna, "_is_safe_url", lambda u: True)
+    src = anna.AnnaArchiveSource("https://annas-archive.gl")
+
+    class _MirrorClient(_FakeClient):
+        async def get(self, url, *a, **k):
+            return _Resp('<a href="https://libgen.li/file.php?id=7">m</a>' + _page_html())
+
+    monkeypatch.setattr(src, "_client", lambda timeout: _MirrorClient([]))
+    ok = asyncio.run(src.available(SearchResult("anna", "x", "epub", ref={"md5": MD5})))
+    assert ok is True
+
+
+def test_available_keeps_book_when_page_fetch_fails(monkeypatch):
+    # Fail-soft: a scrape/network error must KEEP the book (return True), not hide it.
+    monkeypatch.setattr(anna, "_is_safe_url", lambda u: True)
+    src = anna.AnnaArchiveSource("https://annas-archive.gl")
+
+    class _BoomClient(_FakeClient):
+        async def get(self, url, *a, **k):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(src, "_client", lambda timeout: _BoomClient([]))
+    ok = asyncio.run(src.available(SearchResult("anna", "x", "epub", ref={"md5": MD5})))
+    assert ok is True
+
+
 def test_download_short_circuits_gated_endpoints(monkeypatch):
     monkeypatch.setattr(anna, "_is_safe_url", lambda u: True)
     attempts: list[str] = []

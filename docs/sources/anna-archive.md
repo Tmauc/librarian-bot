@@ -19,6 +19,10 @@ startup).
 - **Download** scrapes the book page (`/md5/<md5>`) for mirror links, then streams the first
   working one. Some mirrors (e.g. `libgen.li/ads.php`) return an intermediate HTML page that is
   scraped for the real `get.php?...` file link.
+- **Availability** (`available()`) probes the same md5 page and reports the book as deliverable
+  only if it exposes a real *external* mirror — Anna's own `fast_download`/`slow_download`
+  endpoints are uniformly gated, so a book with only those is dead on arrival. Simple search uses
+  this to pre-filter the offered list; it fails soft (a probe error keeps the book).
 - **SSRF safety**: candidate URLs go through [`security._is_safe_url`](../../librarian/core/security.py);
   redirects are checked by an httpx hook. URLs under the admin-configured `ANNA_ARCHIVE_URL` are
   trusted; `.onion` links are skipped.

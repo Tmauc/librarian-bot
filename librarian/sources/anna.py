@@ -35,6 +35,16 @@ def _link_rank(url: str) -> int:
     return 1 if any(bad in u for bad in _DEPRIORITIZE) else 0
 
 
+def _has_live_mirror(links: list[str]) -> bool:
+    """True if any link is a real external mirror rather than Anna's own gated fast/slow_download
+    endpoints (uniformly blocked: paid membership + DDoS-Guard). A book whose page yields ONLY the
+    gated endpoints cannot be downloaded and must not be offered."""
+    return any(
+        "/fast_download/" not in (u or "").lower() and "/slow_download/" not in (u or "").lower()
+        for u in links
+    )
+
+
 def _is_download_link(url: str, md5: str, base_host: str) -> bool:
     """Whether a scraped link is a real download route (not a search/account page).
 
@@ -323,51 +333,77 @@ class AnnaArchiveSource(Source):
                     logger.warning(f"URL {_redact_url(url)} failed: {e}")
         raise RuntimeError(f"All mirrors failed for md5={md5}")
 
+    async def available(self, result: SearchResult) -> bool:
+        """A book is deliverable only if its md5 page exposes a real EXTERNAL mirror: Anna's own
+        fast/slow_download endpoints are uniformly gated (paid membership + DDoS-Guard), so a book
+        with ONLY those is dead on arrival — never worth offering. Probe the page once with a tight
+        timeout. Fail soft: a network/scrape error keeps the book (don't hide on a transient hiccup);
+        only a page we DID read that yields no live mirror is hidden."""
+        md5 = result.ref.get("md5", "")
+        if not md5:
+            return True
+        try:
+            async with self._client(8) as client:
+                links = await self._scrape_download_links(client, md5)
+        except Exception as e:
+            logger.info(f"Availability probe failed for md5={md5} ({e}) → keeping it")
+            return True
+        live = _has_live_mirror(links)
+        if not live:
+            logger.info(f"md5={md5}: only gated Anna endpoints → hiding (dead mirrors)")
+        return live
+
     async def _get_download_links(self, client: httpx.AsyncClient, md5: str) -> list[str]:
+        try:
+            return await self._scrape_download_links(client, md5)
+        except Exception as e:
+            logger.warning(f"Could not scrape book page for md5={md5}: {e}")
+            return [f"{self.base_url}/slow_download/{md5}/0/0"]
+
+    async def _scrape_download_links(self, client: httpx.AsyncClient, md5: str) -> list[str]:
+        """Scrape the md5 page for usable download links. RAISES on fetch/parse failure so
+        callers can tell a real miss from a transient hiccup (``_get_download_links`` softens it
+        to the last-resort slow_download; ``available`` treats a raise as « keep the book »)."""
         page_url = f"{self.base_url}/md5/{md5}"
         slow = f"{self.base_url}/slow_download/{md5}/0/0"
         base_host = urlparse(self.base_url).netloc
-        try:
-            resp = await client.get(page_url)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-            mirrors: list[str] = []
-            own: list[str] = []  # Anna's own fast/slow_download endpoints
-            seen: set[str] = set()
-            for a in soup.select("a[href]"):
-                href = (a.get("href") or "").strip()
-                if not href or href.startswith(("#", "javascript:")):
-                    continue
-                full = href if href.startswith("http") else urljoin(f"{self.base_url}/", href)
-                if not _is_safe_url(full) or not _is_download_link(full, md5, base_host):
-                    continue
-                low = full.lower()
-                is_own = "/fast_download/" in low or "/slow_download/" in low
-                # Anna decorates each endpoint with tracking-only query variants
-                # (?viewer=1, ?no_redirect=1, ?short=1) that all behave identically —
-                # collapse them so we don't try the same dead endpoint 4×.
-                key = full.split("?", 1)[0] if is_own else full
-                if key in seen:
-                    continue
-                seen.add(key)
-                (own if is_own else mirrors).append(key if is_own else full)
-            # Good external mirrors first, Anna's membership-gated endpoints last. All
-            # partner-indices are gated the same way, so keep only a couple of each as a
-            # last resort (the download loop short-circuits once it sees the gate).
-            mirrors.sort(key=_link_rank)
-            fast = [u for u in own if "/fast_download/" in u.lower()][:2]
-            slows = [u for u in own if "/slow_download/" in u.lower()][:2]
-            if slow.split("?", 1)[0] not in {u.split("?", 1)[0] for u in slows}:
-                slows.append(slow)  # always keep the last-resort slow_download
-            links = mirrors + fast + slows
-            logger.info(
-                f"Found {len(links)} download links for md5={md5} "
-                f"({len(mirrors)} mirror, {len(fast) + len(slows)} anna-own)"
-            )
-            return links
-        except Exception as e:
-            logger.warning(f"Could not scrape book page for md5={md5}: {e}")
-            return [slow]
+        resp = await client.get(page_url)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        mirrors: list[str] = []
+        own: list[str] = []  # Anna's own fast/slow_download endpoints
+        seen: set[str] = set()
+        for a in soup.select("a[href]"):
+            href = (a.get("href") or "").strip()
+            if not href or href.startswith(("#", "javascript:")):
+                continue
+            full = href if href.startswith("http") else urljoin(f"{self.base_url}/", href)
+            if not _is_safe_url(full) or not _is_download_link(full, md5, base_host):
+                continue
+            low = full.lower()
+            is_own = "/fast_download/" in low or "/slow_download/" in low
+            # Anna decorates each endpoint with tracking-only query variants
+            # (?viewer=1, ?no_redirect=1, ?short=1) that all behave identically —
+            # collapse them so we don't try the same dead endpoint 4×.
+            key = full.split("?", 1)[0] if is_own else full
+            if key in seen:
+                continue
+            seen.add(key)
+            (own if is_own else mirrors).append(key if is_own else full)
+        # Good external mirrors first, Anna's membership-gated endpoints last. All
+        # partner-indices are gated the same way, so keep only a couple of each as a
+        # last resort (the download loop short-circuits once it sees the gate).
+        mirrors.sort(key=_link_rank)
+        fast = [u for u in own if "/fast_download/" in u.lower()][:2]
+        slows = [u for u in own if "/slow_download/" in u.lower()][:2]
+        if slow.split("?", 1)[0] not in {u.split("?", 1)[0] for u in slows}:
+            slows.append(slow)  # always keep the last-resort slow_download
+        links = mirrors + fast + slows
+        logger.info(
+            f"Found {len(links)} download links for md5={md5} "
+            f"({len(mirrors)} mirror, {len(fast) + len(slows)} anna-own)"
+        )
+        return links
 
     async def _resolve_html_link(self, resp, source_url: str) -> str | None:
         chunks, size = [], 0

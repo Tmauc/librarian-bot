@@ -43,3 +43,10 @@ class Source(abc.ABC):
         description, a better cover). Returns a dict with any of: ``description``,
         ``cover``. Default: nothing extra. Should fail soft (return {})."""
         return {}
+
+    async def available(self, result: SearchResult) -> bool:
+        """Cheap, best-effort check that ``result`` can actually be downloaded right now
+        (e.g. it exposes a live, non-gated mirror). Lets the client pre-filter dead-mirror
+        books out of the offered list. Default: assume available. MUST fail soft — on any
+        error return True rather than hide a possibly-good result."""
+        return True

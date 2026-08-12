@@ -21,6 +21,8 @@ Defined in [`librarian/sources/base.py`](../../librarian/sources/base.py).
 | `enabled` | Whether it is configured/usable (disabled sources are skipped). |
 | `search(query) -> list[SearchResult]` | Return matches; fail soft (return `[]`, don't raise). |
 | `download(result, on_progress, max_bytes) -> str` | Fetch to a local file; raise on failure. |
+| `details(result) -> dict` | Optional richer metadata for the detail card (description/cover). Default `{}`. |
+| `available(result) -> bool` | Cheap, best-effort liveness probe. Simple search pre-filters dead-mirror books out of the offered list with it. Default `True`; **must fail soft** (return `True` on error). |
 
 ### `SearchResult`
 

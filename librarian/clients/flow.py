@@ -302,10 +302,21 @@ async def run_search(ctx: ClientContext, query: str) -> None:
         await _run_batch(ctx, p, query)  # raw query drives cycle disambiguation (« deuxième cycle »)
         return
 
-    await ctx.say("🔍 Recherche en cours…")
+    await ctx.say("🔍 Recherche et vérification des miroirs…")
     results = await search_service.search(query, ctx.max_file_size)
     if not results:
         await ctx.say(f"😕 Aucun résultat trouvé pour « {query} ».\nEssaie un autre titre ou orthographe.")
+        return
+
+    # Never OFFER a book whose mirrors are all dead: probe availability up-front so the list only
+    # shows what will actually download (like the smart batch, which retries until one works).
+    found = len(results)
+    results = await _available_results(results)
+    if not results:
+        await ctx.say(
+            f"😕 {found} résultat(s) pour « {query} », mais aucun n'est téléchargeable pour "
+            "l'instant (miroirs indisponibles).\nRéessaie plus tard ou essaie un autre titre."
+        )
         return
 
     has_epub = any(r.ext == "epub" for r in results)
@@ -945,30 +956,45 @@ def _group_editions(results, shown: list[int]) -> list[list[int]]:
     return groups
 
 
+_AVAIL_PROBE_LIMIT = 30   # cap probes so a huge result set can't stall the search
+_AVAIL_CONCURRENCY = 10   # parallel mirror probes; gentle enough not to trip Anna's rate limit
+
+
+async def _available_results(results):
+    """Drop books whose mirrors are all dead, so the list NEVER offers an undownloadable result
+    (real bug: « Ceux qui restent » had only Anna's gated endpoints). Each result's owning source
+    probes its mirror concurrently (bounded); fail-soft — a probe error keeps the result. Beyond
+    ``_AVAIL_PROBE_LIMIT`` results pass through unprobed rather than stall the search."""
+    head, tail = results[:_AVAIL_PROBE_LIMIT], results[_AVAIL_PROBE_LIMIT:]
+    sem = asyncio.Semaphore(_AVAIL_CONCURRENCY)
+
+    async def _ok(r) -> bool:
+        async with sem:
+            try:
+                return await download_service.available(r)
+            except Exception:  # never let a probe hiccup hide a possibly-good book
+                return True
+
+    flags = await asyncio.gather(*(_ok(r) for r in head))
+    return [r for r, keep in zip(head, flags, strict=True) if keep] + tail
+
+
 async def _choose_result(ctx: ClientContext, results, query: str, has_epub: bool) -> tuple[int, list[int]]:
-    """Show the list (one row per BOOK; editions grouped). Picking a book with several
-    editions opens an edition chooser; then a detail card. Returns (chosen index, the index
-    list of that book's editions) so the download retry can stay within the SAME book."""
+    """Show the list (one row per BOOK; editions grouped). Picking a book AUTO-selects its best
+    edition (per the user's edition preference) — like the smart batch, the user picks the book, not
+    the edition — then shows a detail card. Returns (chosen index, that book's edition indices
+    ordered best-first) so the download retry stays within the SAME book and falls back across its
+    other editions."""
+    edition = (await prefs.get(ctx.user_key)).get("edition_pref", DEFAULT_EDITION)
     shown = [i for i, r in enumerate(results) if not (r.ext != "epub" and has_epub)]
     groups = _group_editions(results, shown)
     while True:
         pick = int(await ctx.ask_choice(
             _results_card(query, results, groups), [_group_choice(g, results, editions) for g, editions in enumerate(groups)]
         ))
-        editions = groups[pick]
+        # Best edition first (biggest/newest/smallest per pref); the rest are the retry fallbacks.
+        editions = sorted(groups[pick], key=lambda i: _edition_score(results[i], edition), reverse=True)
         idx = editions[0]
-        if len(editions) > 1:  # let the user pick the edition (year/size/format differ)
-            ev = await ctx.ask_choice(
-                Card(
-                    title=f"📚 {(results[idx].title or '?')[:70]}",
-                    description=f"{len(editions)} éditions — choisis laquelle :",
-                    footer="Année · taille · format",
-                ),
-                [_result_choice(i, results[i]) for i in editions] + [Choice("⬅️ Retour", "back")],
-            )
-            if ev == "back":
-                continue
-            idx = int(ev)
         action = await ctx.ask_choice(
             await _detail_card(results[idx]),
             [Choice("⬇️ Télécharger", "dl"), Choice("⬅️ Retour à la liste", "back")],

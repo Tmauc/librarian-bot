@@ -153,11 +153,19 @@ def test_search_downloads_and_delivers_document():
     assert "Envoyé" in ctx.messages[-1]
 
 
-def test_single_search_groups_editions_and_offers_choice():
-    """The list shows one row per book (editions grouped); opening a multi-edition book
-    offers an edition chooser — so a popular title isn't a wall of near-duplicates."""
+def test_single_search_groups_editions_and_auto_picks_best():
+    """The list shows one row per book (editions grouped). Picking a multi-edition book does NOT
+    ask which edition — like the smart batch, the best one is auto-picked (quality pref → biggest)
+    and the others become silent download fallbacks. No edition-chooser step."""
+    picked = {}
+
+    class RecordingSource(StubSource):
+        async def download(self, result, on_progress=None, max_bytes=0):
+            picked["md5"] = result.ref.get("md5")
+            return await super().download(result, on_progress, max_bytes)
+
     async def scenario():
-        registry._ALL[:] = [StubSource([
+        registry._ALL[:] = [RecordingSource([
             SearchResult("stub", "Dune", "epub", size_bytes=1000, ref={"md5": "a"}),
             SearchResult("stub", "Dune", "epub", size_bytes=2000, ref={"md5": "b"}),
             SearchResult("stub", "Foundation", "epub", size_bytes=1000, ref={"md5": "c"}),
@@ -165,15 +173,16 @@ def test_single_search_groups_editions_and_offers_choice():
         await prefs.set("test:1", "format", "epub")
         s = Session("test:1")
         ctx = FakeContext(s)
-        # group 0 = Dune (2 editions) → pick edition "1" → Télécharger → epub
+        # group 0 = Dune (2 editions) → straight to detail card → Télécharger → epub (NO edition step)
         await drive(s, flow.run_search(ctx, "dune"),
-                    [("choice", "0"), ("choice", "1"), ("choice", "dl"), ("choice", "epub")])
+                    [("choice", "0"), ("choice", "dl"), ("choice", "epub")])
         return ctx
 
     ctx = asyncio.run(scenario())
     assert len(ctx.docs) == 1
-    assert any("2 livre(s)" in m for m in ctx.messages)   # 3 results → 2 books listed
-    assert any("2 éditions" in m for m in ctx.messages)   # edition chooser was shown
+    assert any("2 livre(s)" in m for m in ctx.messages)     # 3 results → 2 books listed
+    assert not any("éditions — choisis" in m for m in ctx.messages)  # no edition chooser
+    assert picked["md5"] == "b"                             # quality pref → the 2000-byte edition
 
 
 def test_looks_like_epub_rejects_disguised_files(tmp_path):

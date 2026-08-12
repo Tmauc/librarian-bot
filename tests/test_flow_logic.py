@@ -211,6 +211,29 @@ def test_same_book_candidates_never_crosses_into_another_book():
     assert other not in cands
 
 
+def test_available_results_drops_dead_mirror_books(monkeypatch):
+    # The offered list must never include a book whose mirrors are all dead.
+    live, dead = _MR("Live"), _MR("Dead")
+
+    async def fake_available(r):
+        return r is live
+
+    monkeypatch.setattr(flow.download_service, "available", fake_available)
+    kept = asyncio.run(flow._available_results([dead, live, dead]))
+    assert kept == [live]
+
+
+def test_available_results_keeps_book_when_probe_errors(monkeypatch):
+    # Fail-soft: a probe that raises must KEEP the book, never hide a possibly-good one.
+    a = _MR("Boom")
+
+    async def boom(r):
+        raise RuntimeError("probe network error")
+
+    monkeypatch.setattr(flow.download_service, "available", boom)
+    assert asyncio.run(flow._available_results([a])) == [a]
+
+
 def test_best_matches_prefers_subtitle_overlap_over_bare_tome_number():
     # Two cycles of the same saga share a word (« assassin ») AND tome number 1. The candidate that
     # carries the WHOLE sub-title (« Le Fou et l'Assassin ») must win over another cycle's tome 1.
