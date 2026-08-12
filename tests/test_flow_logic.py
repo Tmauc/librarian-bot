@@ -198,6 +198,19 @@ def test_title_reads_as_tells_french_from_english_fallback():
     assert flow._title_reads_as("The Burning God", "en") is True
 
 
+def test_same_book_candidates_never_crosses_into_another_book():
+    # « Ceux qui restent » (Coquart essay) has two dead-mirror editions; a young-adult novel of
+    # the SAME name sits later in the list. The retry must stay inside the chosen book — picking
+    # edition #1, we get [that edition, its sibling] and NEVER the unrelated novel.
+    ed_a = _MR("Ceux qui restent")
+    ed_b = _MR("Ceux qui restent")
+    other = _MR("Ceux qui restent: Young-adult Fantastique (French Edition)")
+    results = [ed_a, ed_b, other]
+    cands = flow._same_book_candidates(results, 1, [0, 1])  # user picked edition at index 1
+    assert cands == [ed_b, ed_a]        # chosen first, then the sibling edition
+    assert other not in cands
+
+
 def test_best_matches_prefers_subtitle_overlap_over_bare_tome_number():
     # Two cycles of the same saga share a word (« assassin ») AND tome number 1. The candidate that
     # carries the WHOLE sub-title (« Le Fou et l'Assassin ») must win over another cycle's tome 1.

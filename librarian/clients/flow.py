@@ -320,7 +320,7 @@ async def run_search(ctx: ClientContext, query: str) -> None:
             await ctx.say("🔍 Recherche annulée. Envoie un nouveau titre quand tu veux !")
             return
 
-    idx = await _choose_result(ctx, results, query, has_epub)
+    idx, edition_group = await _choose_result(ctx, results, query, has_epub)
     result = results[idx]
 
     # Format: only EPUB sources can be converted; others are delivered as-is.
@@ -335,7 +335,11 @@ async def run_search(ctx: ClientContext, query: str) -> None:
         desired_fmt = offer[0] if offer else "epub"
 
     destination = await _pick_destination(ctx)
-    await _deliver(ctx, results, idx, desired_fmt, destination)
+    # Retry ONLY across editions of the CHOSEN book (chosen edition first), NEVER fall through to a
+    # different book. Real bug: picking Coquart's essay « Ceux qui restent » whose two mirrors were
+    # dead used to silently deliver an unrelated young-adult novel that merely shared the title.
+    candidates = _same_book_candidates(results, idx, edition_group)
+    await _deliver(ctx, candidates, 0, desired_fmt, destination)
 
 
 async def _pick_destination(ctx: ClientContext):
@@ -941,9 +945,10 @@ def _group_editions(results, shown: list[int]) -> list[list[int]]:
     return groups
 
 
-async def _choose_result(ctx: ClientContext, results, query: str, has_epub: bool) -> int:
+async def _choose_result(ctx: ClientContext, results, query: str, has_epub: bool) -> tuple[int, list[int]]:
     """Show the list (one row per BOOK; editions grouped). Picking a book with several
-    editions opens an edition chooser; then a detail card. Returns the chosen index."""
+    editions opens an edition chooser; then a detail card. Returns (chosen index, the index
+    list of that book's editions) so the download retry can stay within the SAME book."""
     shown = [i for i, r in enumerate(results) if not (r.ext != "epub" and has_epub)]
     groups = _group_editions(results, shown)
     while True:
@@ -969,7 +974,15 @@ async def _choose_result(ctx: ClientContext, results, query: str, has_epub: bool
             [Choice("⬇️ Télécharger", "dl"), Choice("⬅️ Retour à la liste", "back")],
         )
         if action == "dl":
-            return idx
+            return idx, editions
+
+
+def _same_book_candidates(results, idx: int, edition_group: list[int]) -> list:
+    """Download candidates for a single-title pick: the chosen edition FIRST, then the other
+    editions of the SAME book — never another book. `_fetch_with_retry` walks this list on a dead
+    mirror, so bounding it to one book stops it delivering an unrelated title of the same name."""
+    order = [idx] + [i for i in edition_group if i != idx]
+    return [results[i] for i in order]
 
 
 def _meta_line(r) -> str:
